@@ -2,9 +2,15 @@ import posthog from "posthog-js/dist/module.full.no-external";
 import { aoBridge } from "./bridge";
 import { isLoopbackHostname } from "./loopback";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
-import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
+import {
+	DEFAULT_POSTHOG_HOST,
+	DEFAULT_POSTHOG_PROJECT_KEY,
+	POSTHOG_TRANSMISSION_ENABLED,
+} from "../../shared/posthog-config";
 
-const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
+const POSTHOG_KEY = POSTHOG_TRANSMISSION_ENABLED
+	? import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY
+	: "";
 const POSTHOG_HOST = import.meta.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
 const RELEASE_TAG = "2026-01-30";
 const REDACTED_LOCAL_URL = "[redacted-local-url]";

@@ -1,5 +1,13 @@
 # Telemetry
 
+This fork disables PostHog transmission in the renderer and daemon. The
+renderer does not initialize the PostHog client. The daemon keeps event
+telemetry in local SQLite when `AO_TELEMETRY_EVENTS=on`, but it never creates a
+remote sink. PostHog environment variables do not override this fork policy.
+
+The sections below document the upstream telemetry model retained in the
+source for compatibility and local diagnostics.
+
 AO uses anonymous telemetry to understand reliability and product usage. The
 Electron renderer sends sanitized PostHog events directly, and the Go daemon can
 persist allowlisted events locally and fan them out to PostHog when remote

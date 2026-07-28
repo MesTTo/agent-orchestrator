@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"log/slog"
-	"time"
 
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -35,23 +34,5 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	if !cfg.Telemetry.Events {
 		return telemetryadapter.NoopSink{}
 	}
-	local := telemetryadapter.NewLocalSQLiteSink(store, log)
-	if cfg.Telemetry.Remote != config.TelemetryRemotePostHog {
-		return local
-	}
-	remote, err := telemetryadapter.NewPostHogSink(cfg.DataDir, cfg.Telemetry.PostHogKey, cfg.Telemetry.PostHogHost, nil, log)
-	if err != nil {
-		log.Warn("telemetry remote sink disabled", "remote", cfg.Telemetry.Remote, "error", err)
-		return local
-	}
-	// Both wrap only the billed remote sink; local storage keeps every event
-	// unaggregated and unfiltered for debugging regardless of PostHog volume.
-	// Aggregation sits in front: burst-prone event names get folded into one
-	// rollup per minute before they ever reach the rate limiter, which then
-	// applies the generous tier to those same names as a structural backstop
-	// rather than the primary cost control, and still does the real limiting
-	// job for every event name that isn't aggregated.
-	rateLimited := telemetryadapter.NewRateLimitedSink(remote, aggregatedEventNames)
-	aggregated := telemetryadapter.NewAggregatingSink(rateLimited, aggregatedEventNames, time.Minute)
-	return telemetryadapter.NewFanoutSink(local, aggregated)
+	return telemetryadapter.NewLocalSQLiteSink(store, log)
 }

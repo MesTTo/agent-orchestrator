@@ -44,7 +44,7 @@ func TestNewTelemetrySink_UsesLocalSQLiteWhenEnabled(t *testing.T) {
 	t.Cleanup(func() { _ = local.Close(t.Context()) })
 }
 
-func TestNewTelemetrySink_FanoutIncludesPostHogWhenConfigured(t *testing.T) {
+func TestNewTelemetrySink_RemainsLocalWhenPostHogIsConfigured(t *testing.T) {
 	dataDir := t.TempDir()
 	store, err := sqlite.Open(dataDir)
 	if err != nil {
@@ -61,11 +61,11 @@ func TestNewTelemetrySink_FanoutIncludesPostHogWhenConfigured(t *testing.T) {
 			PostHogHost: "https://us.i.posthog.com",
 		},
 	}, store, slog.Default())
-	fanout, ok := sink.(*telemetryadapter.FanoutSink)
+	local, ok := sink.(*telemetryadapter.LocalSQLiteSink)
 	if !ok {
-		t.Fatalf("sink type = %T, want *telemetry.FanoutSink", sink)
+		t.Fatalf("sink type = %T, want *telemetry.LocalSQLiteSink", sink)
 	}
-	t.Cleanup(func() { _ = fanout.Close(t.Context()) })
+	t.Cleanup(func() { _ = local.Close(t.Context()) })
 }
 
 type wiringTestRoundTripper func(*http.Request) (*http.Response, error)
