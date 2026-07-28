@@ -40,12 +40,16 @@ class EventSourceStub {
 	onerror: (() => void) | null = null;
 	onmessage: (() => void) | null = null;
 	listeners: string[] = [];
+	handlers = new Map<string, () => void>();
 	constructor(url: string) {
 		this.url = url;
 		EventSourceStub.instances.push(this);
 	}
-	addEventListener(type: string) {
+	addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
 		this.listeners.push(type);
+		if (typeof listener === "function") {
+			this.handlers.set(type, () => listener(new Event(type)));
+		}
 	}
 	close() {
 		this.closed = true;
@@ -131,6 +135,26 @@ describe("createEventTransport", () => {
 			vi.advanceTimersByTime(200);
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["workspaces"] });
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-scm-summary"] });
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+				queryKey: ["goalchainer"],
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("invalidates the GoalChainer projection from its named CDC event", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+
+			EventSourceStub.instances[0].handlers.get("goalchainer_projection_changed")?.();
+			vi.advanceTimersByTime(200);
+
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+				queryKey: ["goalchainer"],
+			});
 		} finally {
 			vi.useRealTimers();
 		}

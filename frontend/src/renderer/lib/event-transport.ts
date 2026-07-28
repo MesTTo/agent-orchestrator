@@ -31,6 +31,7 @@ const CDC_EVENT_TYPES = [
 	"pr_session_changed",
 	"pr_review_thread_added",
 	"pr_review_thread_resolved",
+	"goalchainer_projection_changed",
 ] as const;
 
 /**
@@ -52,6 +53,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				debounce = setTimeout(() => {
 					void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 					void queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey() });
+					void queryClient.invalidateQueries({ queryKey: ["goalchainer"] });
 				}, INVALIDATE_DEBOUNCE_MS);
 			};
 

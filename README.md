@@ -176,6 +176,11 @@ ao start
 
 ## Documentation
 
+This fork adds a read-only [GoalChainer board](docs/goalchainer.md) backed by a
+MeTTaScript Atomspace. It displays scheduled work and links released tasks to
+the existing Agent Orchestrator terminal view. PostHog transmission is
+disabled.
+
 | Document                                                         | Start here when you need                                                                     |
 | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | [docs/architecture.md](docs/architecture.md)                     | Backend mental model, lifecycle, persistence, CDC, status derivation, and daemon boundaries. |
@@ -187,7 +192,7 @@ ao start
 
 ## Telemetry
 
-Agent Orchestrator's Electron renderer sends anonymous usage events to PostHog for reliability and product understanding, and PostHog session recording is enabled with local paths and local URLs redacted before transmission. Set `VITE_AO_POSTHOG_KEY` to an empty string before building to disable transmission. See [docs/telemetry.md](docs/telemetry.md).
+This fork does not transmit renderer or daemon telemetry to PostHog. Daemon events can still be retained in the local SQLite database for debugging. See [docs/telemetry.md](docs/telemetry.md).
 
 ## License
 
