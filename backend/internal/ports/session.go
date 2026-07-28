@@ -27,6 +27,9 @@ type SpawnConfig struct {
 	// SourceTaskID is a caller-owned idempotency key for an externally
 	// scheduled task. Empty keeps the normal always-create spawn behavior.
 	SourceTaskID string
+	// MCPProfile selects a typed, AO-provisioned MCP tool surface. Empty keeps
+	// the agent's ordinary MCP configuration unchanged.
+	MCPProfile domain.MCPProfile
 	// IssueContext is optional pre-fetched tracker context for the task prompt.
 	// Standing rules stay in SystemPrompt; issue facts belong to the user task.
 	IssueContext string

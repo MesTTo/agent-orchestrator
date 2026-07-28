@@ -72,6 +72,9 @@ func New() *Plugin {
 	return &Plugin{}
 }
 
+// SupportsMCPServers reports that OpenCode accepts AO-owned MCP launch configuration.
+func (p *Plugin) SupportsMCPServers() bool { return true }
+
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
@@ -105,7 +108,13 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 
-	envPrefix, agentName, err := opencodeConfigEnvPrefix(cfg.SystemPrompt, cfg.SystemPromptFile, cfg.SessionID)
+	envPrefix, agentName, err := opencodeConfigEnvPrefix(
+		cfg.SystemPrompt,
+		cfg.SystemPromptFile,
+		cfg.DataDir,
+		cfg.SessionID,
+		cfg.MCPServers,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +150,13 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 
-	envPrefix, agentName, err := opencodeConfigEnvPrefix(cfg.SystemPrompt, cfg.SystemPromptFile, cfg.Session.ID)
+	envPrefix, agentName, err := opencodeConfigEnvPrefix(
+		cfg.SystemPrompt,
+		cfg.SystemPromptFile,
+		cfg.DataDir,
+		cfg.Session.ID,
+		cfg.MCPServers,
+	)
 	if err != nil {
 		return nil, false, err
 	}
@@ -364,6 +379,7 @@ const opencodeConfigEnvVar = "OPENCODE_CONFIG"
 type opencodeInlineConfig struct {
 	Schema string                           `json:"$schema,omitempty"`
 	Agent  map[string]opencodeAgentSettings `json:"agent,omitempty"`
+	MCP    map[string]opencodeMCPServer     `json:"mcp,omitempty"`
 }
 
 type opencodeAgentSettings struct {
@@ -371,28 +387,57 @@ type opencodeAgentSettings struct {
 	Prompt string `json:"prompt,omitempty"`
 }
 
-func opencodeConfigEnvPrefix(inlinePrompt, promptFile, sessionID string) ([]string, string, error) {
-	if inlinePrompt == "" && promptFile == "" {
+type opencodeMCPServer struct {
+	Type    string   `json:"type"`
+	Command []string `json:"command"`
+}
+
+func opencodeConfigEnvPrefix(
+	inlinePrompt string,
+	promptFile string,
+	dataDir string,
+	sessionID string,
+	servers []ports.MCPServerLaunch,
+) ([]string, string, error) {
+	if inlinePrompt == "" && promptFile == "" && len(servers) == 0 {
 		return nil, "", nil
 	}
-	if promptFile == "" {
-		return nil, "", fmt.Errorf("opencode: system prompt file required to build agent config")
-	}
-	agentName := opencodeAOAgentName(sessionID)
-	prompt := inlinePrompt
-	if prompt == "" {
-		prompt = "{file:./" + filepath.Base(promptFile) + "}"
-	}
 	dir := filepath.Dir(promptFile)
+	if promptFile == "" {
+		if strings.TrimSpace(dataDir) == "" || strings.TrimSpace(sessionID) == "" {
+			return nil, "", fmt.Errorf("opencode: session artifact directory required to build agent config")
+		}
+		dir = filepath.Join(dataDir, "prompts", sessionID)
+	}
 	configPath := filepath.Join(dir, "opencode.json")
 	config := opencodeInlineConfig{
 		Schema: "https://opencode.ai/config.json",
-		Agent: map[string]opencodeAgentSettings{
+	}
+	agentName := ""
+	if inlinePrompt != "" || promptFile != "" {
+		agentName = opencodeAOAgentName(sessionID)
+		prompt := inlinePrompt
+		if prompt == "" {
+			prompt = "{file:./" + filepath.Base(promptFile) + "}"
+		}
+		config.Agent = map[string]opencodeAgentSettings{
 			agentName: {
 				Mode:   "primary",
 				Prompt: prompt,
 			},
-		},
+		}
+	}
+	if len(servers) > 0 {
+		config.MCP = make(map[string]opencodeMCPServer, len(servers))
+		for _, server := range servers {
+			if err := server.Validate(); err != nil {
+				return nil, "", fmt.Errorf("opencode: %w", err)
+			}
+			config.MCP[server.Name] = opencodeMCPServer{
+				Type:    "local",
+				Command: append([]string{server.Command}, server.Args...),
+			}
+		}
 	}
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {

@@ -4020,6 +4020,10 @@ components:
           - worker
           - orchestrator
           type: string
+        mcpProfile:
+          enum:
+          - oh-my-goals
+          type: string
         projectId:
           type: string
         prompt:

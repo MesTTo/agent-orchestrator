@@ -226,6 +226,7 @@ type LaunchConfig struct {
 	// sessions are unaffected.
 	AllowedTools     []string
 	DisallowedTools  []string
+	MCPServers       []MCPServerLaunch
 	SystemPrompt     string
 	SystemPromptFile string
 	WorkspacePath    string
@@ -255,6 +256,7 @@ type RestoreConfig struct {
 	// system-prompt flag should re-apply this in their resume command.
 	SystemPrompt     string
 	SystemPromptFile string
+	MCPServers       []MCPServerLaunch
 }
 
 // SessionRef identifies an AO session whose agent-owned metadata may be read.

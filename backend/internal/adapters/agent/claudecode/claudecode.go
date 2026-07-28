@@ -32,6 +32,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -61,6 +62,9 @@ type Plugin struct {
 func New() *Plugin {
 	return &Plugin{}
 }
+
+// SupportsMCPServers reports that Claude Code accepts AO-owned MCP launch configuration.
+func (p *Plugin) SupportsMCPServers() bool { return true }
 
 // EmitsSubmitActivity signals that Claude Code fires a user-prompt-submit hook
 // under AO's launch, so Activity.State can flip to active after a prompt is
@@ -168,6 +172,15 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	}
 	appendPermissionFlags(&cmd, permissions)
 	appendToolFlags(&cmd, cfg.AllowedTools, cfg.DisallowedTools)
+	if err := appendMCPConfigFlag(
+		&cmd,
+		cfg.SystemPromptFile,
+		cfg.DataDir,
+		cfg.SessionID,
+		cfg.MCPServers,
+	); err != nil {
+		return nil, err
+	}
 
 	if model := strings.TrimSpace(cfg.Config.Model); model != "" {
 		cmd = append(cmd, "--model", model)
@@ -246,6 +259,15 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	cmd = make([]string, 0, 7)
 	cmd = append(cmd, binary)
 	appendPermissionFlags(&cmd, cfg.Permissions)
+	if err := appendMCPConfigFlag(
+		&cmd,
+		cfg.SystemPromptFile,
+		cfg.DataDir,
+		cfg.Session.ID,
+		cfg.MCPServers,
+	); err != nil {
+		return nil, false, err
+	}
 	systemPrompt, err := resolveRestoreSystemPrompt(cfg)
 	if err != nil {
 		return nil, false, err
@@ -452,6 +474,63 @@ func appendToolFlags(cmd *[]string, allowed, disallowed []string) {
 	if len(disallowed) > 0 {
 		*cmd = append(*cmd, "--disallowedTools", strings.Join(disallowed, ","))
 	}
+}
+
+type claudeMCPConfig struct {
+	MCPServers map[string]claudeMCPServer `json:"mcpServers"`
+}
+
+type claudeMCPServer struct {
+	Type    string   `json:"type"`
+	Command string   `json:"command"`
+	Args    []string `json:"args,omitempty"`
+}
+
+// appendMCPConfigFlag writes an AO-owned additive config beside the session
+// prompt. Claude merges it with the user's ordinary MCP configuration because
+// AO deliberately does not pass --strict-mcp-config.
+func appendMCPConfigFlag(
+	cmd *[]string,
+	systemPromptFile string,
+	dataDir string,
+	sessionID string,
+	servers []ports.MCPServerLaunch,
+) error {
+	if len(servers) == 0 {
+		return nil
+	}
+	dir := filepath.Dir(systemPromptFile)
+	if strings.TrimSpace(systemPromptFile) == "" {
+		if strings.TrimSpace(dataDir) == "" || strings.TrimSpace(sessionID) == "" {
+			return fmt.Errorf("claude-code: session artifact directory is required for MCP configuration")
+		}
+		dir = filepath.Join(dataDir, "prompts", sessionID)
+	}
+	config := claudeMCPConfig{MCPServers: make(map[string]claudeMCPServer, len(servers))}
+	for _, server := range servers {
+		if err := server.Validate(); err != nil {
+			return fmt.Errorf("claude-code: %w", err)
+		}
+		config.MCPServers[server.Name] = claudeMCPServer{
+			Type:    "stdio",
+			Command: server.Command,
+			Args:    append([]string(nil), server.Args...),
+		}
+	}
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("claude-code: encode MCP config: %w", err)
+	}
+	data = append(data, '\n')
+	path := filepath.Join(dir, "claude-mcp.json")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("claude-code: create MCP config directory: %w", err)
+	}
+	if err := hookutil.AtomicWriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("claude-code: write MCP config: %w", err)
+	}
+	*cmd = append(*cmd, "--mcp-config", path)
+	return nil
 }
 
 // claudeBinarySpec locates the claude binary: PATH first, then the native

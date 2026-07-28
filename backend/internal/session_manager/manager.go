@@ -66,7 +66,10 @@ var (
 	// appends Enter after every paste, and an Enter into a decision dialog
 	// would answer it on the user's behalf. The API maps it to a 409; the
 	// caller retries once the user has answered in the terminal.
-	ErrAwaitingDecision = errors.New("session: awaiting a user decision")
+	ErrAwaitingDecision           = errors.New("session: awaiting a user decision")
+	ErrMCPProfileUnsupported      = errors.New("session: MCP profile is unsupported by the selected harness")
+	ErrMCPProfileUnavailable      = errors.New("session: MCP profile runtime is unavailable")
+	ErrExternalMCPProfileMismatch = errors.New("session: external source MCP profile differs from the existing session")
 )
 
 // Env vars a spawned process reads to learn who it is.
@@ -424,8 +427,12 @@ func (m *Manager) spawn(
 	// Reject an unknown harness before any durable state is created. Doing this
 	// after CreateSession would leave a terminated orphan row and waste a
 	// worktree on a spawn that can never launch.
-	if _, ok := m.agents.Agent(cfg.Harness); !ok {
+	agent, ok := m.agents.Agent(cfg.Harness)
+	if !ok {
 		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: %w: %q", ErrUnknownHarness, cfg.Harness)
+	}
+	if err := m.validateMCPProfileSupport(cfg.MCPProfile, cfg.Harness, agent); err != nil {
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: %w", err)
 	}
 
 	if err := m.validateRuntimePrerequisites(); err != nil {
@@ -457,6 +464,11 @@ func (m *Manager) spawn(
 		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: create: %w", err)
 	}
 	if !created {
+		if rec.Metadata.MCPProfile != cfg.MCPProfile {
+			return domain.SessionRecord{}, 0, 0, false, fmt.Errorf(
+				"spawn: %w", ErrExternalMCPProfileMismatch,
+			)
+		}
 		if !rec.IsTerminated &&
 			strings.TrimSpace(rec.Metadata.RuntimeHandleID) == "" {
 			return domain.SessionRecord{}, 0, 0, false, errors.New(
@@ -464,6 +476,16 @@ func (m *Manager) spawn(
 			)
 		}
 		return rec, len(rec.Metadata.Prompt), 0, false, nil
+	}
+	mcpRuntime, err := m.resolveMCPProfile(
+		ctx,
+		cfg.MCPProfile,
+		cfg.Harness,
+		project.Config.Env,
+	)
+	if err != nil {
+		m.rollbackSpawnSeedRow(ctx, rec.ID)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: %w", err)
 	}
 	id := rec.ID
 	systemPromptFile, err := m.prepareSystemPromptFile(id, cfg.Harness, systemPrompt)
@@ -511,16 +533,23 @@ func (m *Manager) spawn(
 		prompt = appendAttachmentReferences(prompt, refs)
 	}
 
-	agent, ok := m.agents.Agent(cfg.Harness)
-	if !ok {
-		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false)
-		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: no agent adapter for harness %q", id, cfg.Harness)
-	}
 	agentConfig := effectiveAgentConfig(cfg.Kind, project.Config)
 	env := m.runtimeEnv(id, cfg.ProjectID, cfg.IssueID, project.Config.Env)
 	m.augmentAgentRuntimeEnv(agent, env)
 	if err := m.prepareWorkspace(ctx, agent, id, ws.Path, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: %w", id, err)
+	}
+	mcpServers, err := m.prepareMCPProfile(
+		ctx,
+		mcpRuntime,
+		id,
+		cfg.ProjectID,
+		ws,
+		env,
+	)
+	if err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true)
 		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: %w", id, err)
 	}
 	launchCfg := ports.LaunchConfig{
@@ -534,6 +563,7 @@ func (m *Manager) spawn(
 		IssueID:          string(cfg.IssueID),
 		Config:           agentConfig,
 		Permissions:      agentConfig.Permissions,
+		MCPServers:       mcpServers,
 	}
 	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
 	if err != nil {
@@ -585,6 +615,7 @@ func (m *Manager) spawn(
 		RuntimeHandleID:   handle.ID,
 		RuntimeLaunchID:   launchID,
 		Prompt:            prompt,
+		MCPProfile:        cfg.MCPProfile,
 	}
 	if err := m.lcm.MarkSpawned(ctx, id, metadata); err != nil {
 		runtimeDestroyed := m.runtime.Destroy(ctx, handle) == nil
@@ -1222,7 +1253,27 @@ func (m *Manager) relaunchSession(ctx context.Context, operation string, rec dom
 	if err := m.prepareWorkspace(ctx, agent, rec.ID, ws.Path, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
 	}
-	argv, delivery, mode, err := restoreArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata, systemPrompt, systemPromptFile, agentConfig, rec.Kind, rec.Harness, m.dataDir)
+	mcpRuntime, err := m.resolveMCPProfile(
+		ctx,
+		rec.Metadata.MCPProfile,
+		rec.Harness,
+		project.Config.Env,
+	)
+	if err != nil {
+		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+	}
+	mcpServers, err := m.prepareMCPProfile(
+		ctx,
+		mcpRuntime,
+		rec.ID,
+		rec.ProjectID,
+		ws,
+		env,
+	)
+	if err != nil {
+		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+	}
+	argv, delivery, mode, err := restoreArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata, systemPrompt, systemPromptFile, agentConfig, rec.Kind, rec.Harness, m.dataDir, mcpServers)
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
@@ -1266,6 +1317,7 @@ func (m *Manager) relaunchSession(ctx context.Context, operation string, rec dom
 		RuntimeLaunchID:   launchID,
 		AgentSessionID:    rec.Metadata.AgentSessionID,
 		Prompt:            rec.Metadata.Prompt,
+		MCPProfile:        rec.Metadata.MCPProfile,
 	}
 	if err := m.lcm.MarkSpawned(ctx, rec.ID, metadata); err != nil {
 		_ = m.runtime.Destroy(ctx, handle)
@@ -1283,6 +1335,7 @@ func (m *Manager) relaunchSession(ctx context.Context, operation string, rec dom
 			SystemPromptFile: systemPromptFile,
 			Config:           agentConfig,
 			Permissions:      agentConfig.Permissions,
+			MCPServers:       mcpServers,
 		}
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, rec.ID, rec.Metadata.Prompt); err != nil {
 			_ = m.runtime.Destroy(ctx, handle)
@@ -2277,6 +2330,7 @@ func seedRecord(cfg ports.SpawnConfig, now time.Time) domain.SessionRecord {
 		Harness:     cfg.Harness,
 		DisplayName: cfg.DisplayName,
 		Activity:    domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
+		Metadata:    domain.SessionMetadata{MCPProfile: cfg.MCPProfile},
 	}
 }
 
@@ -2990,13 +3044,13 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 // signals via ok=false (e.g. no native session id captured yet). Returns
 // ErrNotResumable when transcript-preserving restore is required but unavailable,
 // or when a promptless, unresumable worker has nothing to restore from.
-func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, _ domain.AgentHarness, dataDir string) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
+func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, _ domain.AgentHarness, dataDir string, mcpServers []ports.MCPServerLaunch) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
 	ref := ports.SessionRef{
 		ID:            string(id),
 		WorkspacePath: workspacePath,
 		Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: meta.AgentSessionID},
 	}
-	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions})
+	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions, MCPServers: mcpServers})
 	if err != nil {
 		return nil, "", "", fmt.Errorf("restore command: %w", err)
 	}
@@ -3022,6 +3076,7 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 		SystemPromptFile: systemPromptFile,
 		Config:           agentConfig,
 		Permissions:      agentConfig.Permissions,
+		MCPServers:       mcpServers,
 	}
 	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
 	if err != nil {

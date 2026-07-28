@@ -170,6 +170,10 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "SOURCE_TASK_ID_INVALID", "sourceTaskId must contain 1 to 128 safe identifier characters", nil)
 		return
 	}
+	if !in.MCPProfile.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "MCP_PROFILE_INVALID", "mcpProfile must be oh-my-goals when set", nil)
+		return
+	}
 	// displayName is optional at the API (the desktop new-task dialog omits it
 	// and the read model falls back to the session id). `ao spawn` makes it
 	// required CLI-side. When present, it is held to the same length cap here so
@@ -191,6 +195,7 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		ProjectID:    in.ProjectID,
 		IssueID:      in.IssueID,
 		SourceTaskID: sourceTaskID,
+		MCPProfile:   in.MCPProfile,
 		Kind:         in.Kind,
 		Harness:      in.Harness,
 		Branch:       in.Branch,

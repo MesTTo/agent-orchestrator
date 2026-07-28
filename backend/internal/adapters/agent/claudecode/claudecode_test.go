@@ -35,6 +35,43 @@ func TestGetLaunchCommandBypassWithPrompt(t *testing.T) {
 	}
 }
 
+func TestGetLaunchCommandAddsSessionScopedMCPConfigWithoutSystemPrompt(t *testing.T) {
+	dataDir := t.TempDir()
+	p := &Plugin{resolvedBinary: "claude"}
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir:   dataDir,
+		SessionID: "research-1",
+		MCPServers: []ports.MCPServerLaunch{{
+			Name:    "oh-my-goals",
+			Command: "/usr/bin/node",
+			Args:    []string{"/opt/oh-my-goals/cli.js", "mcp"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dataDir, "prompts", "research-1", "claude-mcp.json")
+	if !containsSubsequence(cmd, []string{"--mcp-config", configPath}) {
+		t.Fatalf("command %#v missing additive MCP config", cmd)
+	}
+	if contains(cmd, "--strict-mcp-config") {
+		t.Fatalf("command %#v disables the user's ordinary MCP servers", cmd)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config claudeMCPConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	server := config.MCPServers["oh-my-goals"]
+	if server.Type != "stdio" || server.Command != "/usr/bin/node" ||
+		!reflect.DeepEqual(server.Args, []string{"/opt/oh-my-goals/cli.js", "mcp"}) {
+		t.Fatalf("MCP server config = %#v", server)
+	}
+}
+
 func TestGetLaunchCommandMapsPermissionModes(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -389,6 +389,48 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 	}
 }
 
+func TestGetLaunchCommandAddsMCPConfigWithoutSystemPrompt(t *testing.T) {
+	dataDir := t.TempDir()
+	plugin := &Plugin{resolvedBinary: "opencode"}
+	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir:   dataDir,
+		SessionID: "research-1",
+		MCPServers: []ports.MCPServerLaunch{{
+			Name:    "oh-my-goals",
+			Command: "/usr/bin/node",
+			Args:    []string{"/opt/oh-my-goals/cli.js", "mcp"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dataDir, "prompts", "research-1", "opencode.json")
+	want := []string{"env", "OPENCODE_CONFIG=" + configPath, "opencode"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config opencodeInlineConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	server := config.MCP["oh-my-goals"]
+	if server.Type != "local" ||
+		!reflect.DeepEqual(server.Command, []string{
+			"/usr/bin/node",
+			"/opt/oh-my-goals/cli.js",
+			"mcp",
+		}) {
+		t.Fatalf("MCP server config = %#v", server)
+	}
+	if len(config.Agent) != 0 {
+		t.Fatalf("agent config = %#v, want no synthetic agent", config.Agent)
+	}
+}
+
 func TestGetLaunchCommandSystemPromptFileConfig(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "opencode"}
 	promptFile := filepath.Join(t.TempDir(), "system.md")

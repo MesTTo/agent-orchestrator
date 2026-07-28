@@ -686,6 +686,12 @@ func toAPIError(err error) error {
 		return apierr.Invalid("AGENT_REQUIRED", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrScratchBranchUnsupported):
 		return apierr.Invalid("SCRATCH_BRANCH_UNSUPPORTED", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrMCPProfileUnsupported):
+		return apierr.Invalid("MCP_PROFILE_UNSUPPORTED", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrMCPProfileUnavailable):
+		return apierr.Invalid("MCP_PROFILE_UNAVAILABLE", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrExternalMCPProfileMismatch):
+		return apierr.Conflict("EXTERNAL_MCP_PROFILE_MISMATCH", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere):
 		return apierr.Conflict("BRANCH_CHECKED_OUT_ELSEWHERE", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchNotFetched):

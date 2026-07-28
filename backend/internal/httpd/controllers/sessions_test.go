@@ -34,6 +34,7 @@ type fakeSessionService struct {
 	cleanupSkipped  []sessionsvc.CleanupSkipped
 	workspaceFiles  sessionsvc.WorkspaceFiles
 	workspaceFile   sessionsvc.WorkspaceFileDetail
+	lastSpawn       ports.SpawnConfig
 	spawnErr        error
 	claimErr        error
 	listPRErr       error
@@ -67,6 +68,7 @@ func (f *fakeSessionService) List(_ context.Context, filter sessionsvc.ListFilte
 }
 
 func (f *fakeSessionService) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
+	f.lastSpawn = cfg
 	if f.spawnErr != nil {
 		return domain.Session{}, 0, 0, f.spawnErr
 	}
@@ -74,6 +76,37 @@ func (f *fakeSessionService) Spawn(_ context.Context, cfg ports.SpawnConfig) (do
 	s := domain.Session{SessionRecord: domain.SessionRecord{ID: domain.SessionID(string(cfg.ProjectID) + "-2"), ProjectID: cfg.ProjectID, IssueID: cfg.IssueID, Kind: cfg.Kind, Harness: cfg.Harness, DisplayName: cfg.DisplayName, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}, CreatedAt: now, UpdatedAt: now}, Status: domain.StatusIdle}
 	f.sessions[s.ID] = s
 	return s, len(cfg.Prompt), 0, nil
+}
+
+func TestSessionsAPISpawnAcceptsOnlyTypedMCPProfiles(t *testing.T) {
+	svc := newFakeSessionService()
+	server := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(
+		t,
+		server,
+		"POST",
+		"/api/v1/sessions",
+		`{"projectId":"ao","harness":"codex","mcpProfile":"oh-my-goals"}`,
+	)
+	if status != http.StatusCreated {
+		t.Fatalf("typed MCP profile spawn = %d, want 201; body=%s", status, body)
+	}
+	if svc.lastSpawn.MCPProfile != domain.MCPProfileOhMyGoals {
+		t.Fatalf("spawn profile = %q", svc.lastSpawn.MCPProfile)
+	}
+
+	body, status, _ = doRequest(
+		t,
+		server,
+		"POST",
+		"/api/v1/sessions",
+		`{"projectId":"ao","harness":"codex","mcpProfile":"arbitrary-command"}`,
+	)
+	if status != http.StatusBadRequest ||
+		!strings.Contains(string(body), "MCP_PROFILE_INVALID") {
+		t.Fatalf("untyped MCP profile spawn = %d; body=%s", status, body)
+	}
 }
 
 func (f *fakeSessionService) SpawnFromExternalSource(

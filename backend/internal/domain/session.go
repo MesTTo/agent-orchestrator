@@ -16,22 +16,34 @@ type (
 // SessionKind distinguishes a worker session from an orchestrator session.
 type SessionKind string
 
+// MCPProfile names a trusted AO-owned MCP configuration.
+type MCPProfile string
+
 // Session kinds.
 const (
 	KindWorker       SessionKind = "worker"
 	KindOrchestrator SessionKind = "orchestrator"
 )
 
+// MCPProfileOhMyGoals installs the typed Oh My Goals MCP server and skill.
+const MCPProfileOhMyGoals MCPProfile = "oh-my-goals"
+
+// Valid reports whether the profile has an installed, typed AO integration.
+func (p MCPProfile) Valid() bool {
+	return p == "" || p == MCPProfileOhMyGoals
+}
+
 // SessionMetadata is the typed, off-status metadata for a session: operational
 // handles and seed inputs used by Session Manager and reaper.
 type SessionMetadata struct {
-	Branch            string `json:"branch,omitempty"`
-	WorkspacePath     string `json:"workspacePath,omitempty"`
-	WorkspaceRepoPath string `json:"workspaceRepoPath,omitempty"`
-	RuntimeHandleID   string `json:"runtimeHandleId,omitempty"`
-	RuntimeLaunchID   string `json:"runtimeLaunchId,omitempty"`
-	AgentSessionID    string `json:"agentSessionId,omitempty"`
-	Prompt            string `json:"prompt,omitempty"`
+	Branch            string     `json:"branch,omitempty"`
+	WorkspacePath     string     `json:"workspacePath,omitempty"`
+	WorkspaceRepoPath string     `json:"workspaceRepoPath,omitempty"`
+	RuntimeHandleID   string     `json:"runtimeHandleId,omitempty"`
+	RuntimeLaunchID   string     `json:"runtimeLaunchId,omitempty"`
+	AgentSessionID    string     `json:"agentSessionId,omitempty"`
+	Prompt            string     `json:"prompt,omitempty"`
+	MCPProfile        MCPProfile `json:"mcpProfile,omitempty"`
 	// PreviewURL is the browser preview target the desktop app opens for this
 	// session. Set via `ao preview` (POST /sessions/{id}/preview); persisted so
 	// it survives a daemon restart. Empty means no preview has been requested.

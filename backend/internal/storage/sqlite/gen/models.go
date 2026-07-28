@@ -202,6 +202,7 @@ type Session struct {
 	RuntimeLaunchID    string
 	WorkspaceRepoPath  string
 	TerminateOnPRMerge bool
+	McpProfile         domain.MCPProfile
 }
 
 type SessionCleanupFact struct {

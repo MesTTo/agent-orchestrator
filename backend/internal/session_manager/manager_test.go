@@ -340,6 +340,8 @@ type recordingAgent struct {
 	restoreCalls int
 }
 
+func (a *recordingAgent) SupportsMCPServers() bool { return true }
+
 func (a *recordingAgent) GetLaunchCommand(_ context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	a.launchCalls++
 	a.lastConfig = cfg.Config

@@ -84,6 +84,28 @@ func TestGetLaunchCommandBuildsCrossPlatformArgv(t *testing.T) {
 	}
 }
 
+func TestGetLaunchCommandAddsSessionMCPServerOverrides(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "codex"}
+	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		MCPServers: []ports.MCPServerLaunch{{
+			Name:    "oh-my-goals",
+			Command: "/usr/bin/node",
+			Args:    []string{"/opt/oh-my-goals/cli.js", "mcp"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range [][]string{
+		{"-c", `mcp_servers.oh-my-goals.command='/usr/bin/node'`},
+		{"-c", `mcp_servers.oh-my-goals.args=['/opt/oh-my-goals/cli.js','mcp']`},
+	} {
+		if !containsSubsequence(cmd, want) {
+			t.Fatalf("command %#v missing %#v", cmd, want)
+		}
+	}
+}
+
 func TestGetLaunchCommandWithoutWorkspaceOmitsTrustFlag(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "codex"}
 

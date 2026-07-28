@@ -1446,6 +1446,8 @@ export interface components {
             issueId?: string;
             /** @enum {string} */
             kind?: "worker" | "orchestrator";
+            /** @enum {string} */
+            mcpProfile?: "oh-my-goals";
             projectId: string;
             prompt?: string;
             sourceTaskId?: string;

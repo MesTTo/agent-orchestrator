@@ -37,6 +37,9 @@ func New() *Plugin {
 	return &Plugin{}
 }
 
+// SupportsMCPServers reports that Codex accepts AO-owned MCP launch configuration.
+func (p *Plugin) SupportsMCPServers() bool { return true }
+
 // EmitsSubmitActivity signals Codex fires a user-prompt-submit hook under AO's
 // launch. See ports.ActivitySignaler.
 func (p *Plugin) EmitsSubmitActivity() bool { return true }
@@ -115,6 +118,9 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	appendTerminalCompatibilityFlags(&cmd)
 	appendWorkspaceTrustFlag(&cmd, cfg.WorkspacePath)
 	appendModelFlag(&cmd, cfg.Config)
+	if err := appendMCPServers(&cmd, cfg.MCPServers); err != nil {
+		return nil, err
+	}
 
 	if cfg.SystemPrompt != "" {
 		cmd = append(cmd, "-c", "developer_instructions="+codexTOMLConfigString(cfg.SystemPrompt))
@@ -157,6 +163,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	appendTerminalCompatibilityFlags(&cmd)
 	appendWorkspaceTrustFlag(&cmd, cfg.Session.WorkspacePath)
 	appendModelFlag(&cmd, cfg.Config)
+	if err := appendMCPServers(&cmd, cfg.MCPServers); err != nil {
+		return nil, false, err
+	}
 	if cfg.SystemPrompt != "" {
 		cmd = append(cmd, "-c", "developer_instructions="+codexTOMLConfigString(cfg.SystemPrompt))
 	} else if cfg.SystemPromptFile != "" {
@@ -378,6 +387,30 @@ func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		*cmd = append(*cmd, "--model", model)
 	}
+}
+
+func appendMCPServers(cmd *[]string, servers []ports.MCPServerLaunch) error {
+	for _, server := range servers {
+		if err := server.Validate(); err != nil {
+			return fmt.Errorf("codex: %w", err)
+		}
+		prefix := "mcp_servers." + server.Name
+		*cmd = append(
+			*cmd,
+			"-c", prefix+".command="+codexTOMLConfigString(server.Command),
+		)
+		if len(server.Args) > 0 {
+			args := make([]string, len(server.Args))
+			for i, arg := range server.Args {
+				args[i] = codexTOMLConfigString(arg)
+			}
+			*cmd = append(
+				*cmd,
+				"-c", prefix+".args=["+strings.Join(args, ",")+"]",
+			)
+		}
+	}
+	return nil
 }
 
 func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {

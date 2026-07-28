@@ -387,6 +387,7 @@ func TestSessionRuntimeLaunchIDRoundTrip(t *testing.T) {
 	rec := sampleRecord("mer")
 	rec.Metadata.RuntimeHandleID = "tmux-1"
 	rec.Metadata.RuntimeLaunchID = "launch-1"
+	rec.Metadata.MCPProfile = domain.MCPProfileOhMyGoals
 
 	created, err := s.CreateSession(ctx, rec)
 	if err != nil {
@@ -394,6 +395,9 @@ func TestSessionRuntimeLaunchIDRoundTrip(t *testing.T) {
 	}
 	if created.Metadata.RuntimeLaunchID != "launch-1" {
 		t.Fatalf("created launch id = %q", created.Metadata.RuntimeLaunchID)
+	}
+	if created.Metadata.MCPProfile != domain.MCPProfileOhMyGoals {
+		t.Fatalf("created MCP profile = %q", created.Metadata.MCPProfile)
 	}
 	created.Metadata.RuntimeLaunchID = "launch-2"
 	if err := s.UpdateSession(ctx, created); err != nil {
@@ -406,8 +410,13 @@ func TestSessionRuntimeLaunchIDRoundTrip(t *testing.T) {
 	if got.Metadata.RuntimeLaunchID != "launch-2" {
 		t.Fatalf("updated launch id = %q", got.Metadata.RuntimeLaunchID)
 	}
+	if got.Metadata.MCPProfile != domain.MCPProfileOhMyGoals {
+		t.Fatalf("updated MCP profile = %q", got.Metadata.MCPProfile)
+	}
 	listed, err := s.ListSessions(ctx, "mer")
-	if err != nil || len(listed) != 1 || listed[0].Metadata.RuntimeLaunchID != "launch-2" {
+	if err != nil || len(listed) != 1 ||
+		listed[0].Metadata.RuntimeLaunchID != "launch-2" ||
+		listed[0].Metadata.MCPProfile != domain.MCPProfileOhMyGoals {
 		t.Fatalf("listed sessions = %+v err=%v", listed, err)
 	}
 }

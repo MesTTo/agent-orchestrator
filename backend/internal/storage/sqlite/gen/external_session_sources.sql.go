@@ -16,7 +16,8 @@ SELECT s.id, s.project_id, s.num, s.issue_id, s.kind, s.harness,
     s.workspace_path, s.runtime_handle_id, s.agent_session_id, s.prompt,
     s.created_at, s.updated_at, s.display_name, s.first_signal_at,
     s.preview_url, s.preview_revision, s.cleanup_generation,
-    s.runtime_launch_id, s.workspace_repo_path, s.terminate_on_pr_merge
+    s.runtime_launch_id, s.workspace_repo_path, s.terminate_on_pr_merge,
+    s.mcp_profile
 FROM external_session_sources AS source
 JOIN sessions AS s ON s.id = source.session_id
 WHERE source.project_id = ? AND source.source_task_id = ?
@@ -55,6 +56,7 @@ func (q *Queries) GetSessionByExternalSource(ctx context.Context, arg GetSession
 		&i.RuntimeLaunchID,
 		&i.WorkspaceRepoPath,
 		&i.TerminateOnPRMerge,
+		&i.McpProfile,
 	)
 	return i, err
 }
