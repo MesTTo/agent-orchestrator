@@ -63,6 +63,7 @@ var errPreviewFileNotFound = errors.New("preview file not found")
 type SessionService interface {
 	List(ctx context.Context, filter sessionsvc.ListFilter) ([]domain.Session, error)
 	Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error)
+	SpawnFromExternalSource(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, bool, error)
 	SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, clean bool) (domain.Session, error)
 	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
 	Restore(ctx context.Context, id domain.SessionID) (sessionsvc.RestoreOutcome, error)
@@ -164,6 +165,11 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_TOO_LONG", "prompt is too long", nil)
 		return
 	}
+	sourceTaskID := strings.TrimSpace(in.SourceTaskID)
+	if sourceTaskID != "" && !ports.ValidExternalSourceTaskID(sourceTaskID) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "SOURCE_TASK_ID_INVALID", "sourceTaskId must contain 1 to 128 safe identifier characters", nil)
+		return
+	}
 	// displayName is optional at the API (the desktop new-task dialog omits it
 	// and the read model falls back to the session id). `ao spawn` makes it
 	// required CLI-side. When present, it is held to the same length cap here so
@@ -181,12 +187,40 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", attachErr.code, attachErr.message, nil)
 		return
 	}
-	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, Prompt: in.Prompt, DisplayName: displayName, Attachments: attachments})
+	cfg := ports.SpawnConfig{
+		ProjectID:    in.ProjectID,
+		IssueID:      in.IssueID,
+		SourceTaskID: sourceTaskID,
+		Kind:         in.Kind,
+		Harness:      in.Harness,
+		Branch:       in.Branch,
+		Prompt:       in.Prompt,
+		DisplayName:  displayName,
+		Attachments:  attachments,
+	}
+	created := true
+	var sess domain.Session
+	var promptBytes, systemPromptBytes int
+	var err error
+	if sourceTaskID == "" {
+		sess, promptBytes, systemPromptBytes, err = c.Svc.Spawn(r.Context(), cfg)
+	} else {
+		sess, promptBytes, systemPromptBytes, created, err = c.Svc.SpawnFromExternalSource(r.Context(), cfg)
+	}
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusCreated, SpawnSessionResponse{Session: sessionView(sess), PromptBytes: promptBytes, SystemPromptBytes: systemPromptBytes})
+	status := http.StatusCreated
+	if !created {
+		status = http.StatusOK
+	}
+	envelope.WriteJSON(w, status, SpawnSessionResponse{
+		Session:           sessionView(sess),
+		PromptBytes:       promptBytes,
+		SystemPromptBytes: systemPromptBytes,
+		Created:           created,
+	})
 }
 
 // spawnAttachmentError carries a client-facing API error code + message for a

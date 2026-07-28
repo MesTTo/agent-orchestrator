@@ -45,6 +45,7 @@ type ListFilter struct {
 // *sessionmanager.Manager in production, a fake in tests.
 type commander interface {
 	Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error)
+	SpawnFromExternalSource(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, bool, error)
 	RestoreWithMode(ctx context.Context, id domain.SessionID) (sessionmanager.RestoreResult, error)
 	ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (sessionmanager.RestoreResult, error)
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
@@ -166,30 +167,56 @@ func NewWithDeps(d Deps) *Service {
 // Spawn creates a session and returns the API-facing read model plus
 // ephemeral prompt size measurements.
 func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
+	session, promptBytes, systemPromptBytes, _, err := s.spawn(ctx, cfg, false)
+	return session, promptBytes, systemPromptBytes, err
+}
+
+// SpawnFromExternalSource creates at most one session for sourceTaskId.
+func (s *Service) SpawnFromExternalSource(
+	ctx context.Context,
+	cfg ports.SpawnConfig,
+) (domain.Session, int, int, bool, error) {
+	return s.spawn(ctx, cfg, true)
+}
+
+func (s *Service) spawn(
+	ctx context.Context,
+	cfg ports.SpawnConfig,
+	external bool,
+) (domain.Session, int, int, bool, error) {
 	project, err := s.requireProject(ctx, cfg.ProjectID)
 	if err != nil {
-		return domain.Session{}, 0, 0, err
+		return domain.Session{}, 0, 0, false, err
 	}
 	start := s.now()
 	firstSession, err := s.isFirstSession(ctx)
 	if err != nil {
-		return domain.Session{}, 0, 0, fmt.Errorf("count sessions: %w", err)
+		return domain.Session{}, 0, 0, false, fmt.Errorf("count sessions: %w", err)
 	}
 	cfg = s.withIssueContext(ctx, cfg, project)
-	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(ctx, cfg)
+	var rec domain.SessionRecord
+	var promptBytes, systemPromptBytes int
+	created := true
+	if external {
+		rec, promptBytes, systemPromptBytes, created, err = s.manager.SpawnFromExternalSource(ctx, cfg)
+	} else {
+		rec, promptBytes, systemPromptBytes, err = s.manager.Spawn(ctx, cfg)
+	}
 	if err != nil {
 		s.emitSpawnFailed(cfg, err, s.now().Sub(start).Milliseconds())
-		return domain.Session{}, 0, 0, toAPIError(err)
+		return domain.Session{}, 0, 0, false, toAPIError(err)
 	}
-	s.emitSpawned(rec, s.now().Sub(start).Milliseconds())
-	if firstSession {
-		s.emitFirstSessionSpawned(rec, project)
+	if created {
+		s.emitSpawned(rec, s.now().Sub(start).Milliseconds())
+		if firstSession {
+			s.emitFirstSessionSpawned(rec, project)
+		}
 	}
 	sess, err := s.toSession(ctx, rec)
 	if err != nil {
-		return domain.Session{}, 0, 0, err
+		return domain.Session{}, 0, 0, false, err
 	}
-	return sess, promptBytes, systemPromptBytes, nil
+	return sess, promptBytes, systemPromptBytes, created, nil
 }
 
 // requireProject verifies the project is registered before any spawn write

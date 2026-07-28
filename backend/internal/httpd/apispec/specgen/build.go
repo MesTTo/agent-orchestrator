@@ -17,6 +17,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	goalchainersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/goalchainer"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 )
 
@@ -59,6 +60,8 @@ func Build() ([]byte, error) {
 			"Supported and locally runnable agent adapters"),
 		*(&openapi31.Tag{Name: "projects"}).WithDescription(
 			"Project registry, configuration, and lifecycle administration"),
+		*(&openapi31.Tag{Name: "goalchainer"}).WithDescription(
+			"Read-only projections of GoalChainer-owned MeTTa task boards"),
 		*(&openapi31.Tag{Name: "sessions"}).WithDescription(
 			"Agent session lifecycle and messaging"),
 		*(&openapi31.Tag{Name: "prs"}).WithDescription(
@@ -250,6 +253,11 @@ var schemaNames = map[string]string{
 	"ProjectSetConfigInput":             "SetProjectConfigInput",
 	"ProjectUpdateSettingsInput":        "UpdateProjectSettingsInput",
 	"ProjectWorkspaceRepo":              "WorkspaceRepo",
+	"GoalchainerProjection":             "GoalChainerProjection",
+	"GoalchainerTask":                   "GoalChainerTask",
+	"GoalchainerSummary":                "GoalChainerSummary",
+	"GoalchainerAudit":                  "GoalChainerAudit",
+	"GoalchainerDeleteResult":           "GoalChainerDeleteResult",
 	"SessionWorkspaceFileStatus":        "WorkspaceFileStatus",
 }
 
@@ -327,6 +335,7 @@ func operations() []operation {
 	ops := append([]operation{}, eventOperations()...)
 	ops = append(ops, agentOperations()...)
 	ops = append(ops, projectOperations()...)
+	ops = append(ops, goalChainerOperations()...)
 	ops = append(ops, sessionOperations()...)
 	ops = append(ops, prOperations()...)
 	ops = append(ops, reviewOperations()...)
@@ -337,6 +346,47 @@ func operations() []operation {
 	ops = append(ops, mobileOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
 	return ops
+}
+
+func goalChainerOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/projects/{id}/goalchainer", id: "getGoalChainerProjection", tag: "goalchainer",
+			summary:    "Read the GoalChainer-owned task board projection",
+			pathParams: []any{controllers.ProjectIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, goalchainersvc.Projection{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/projects/{id}/goalchainer", id: "putGoalChainerProjection", tag: "goalchainer",
+			summary:    "Replace the read-only GoalChainer task board projection",
+			pathParams: []any{controllers.ProjectIDParam{}},
+			reqBody:    goalchainersvc.Projection{},
+			resps: []respUnit{
+				{http.StatusOK, goalchainersvc.Projection{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/projects/{id}/goalchainer", id: "deleteGoalChainerProjection", tag: "goalchainer",
+			summary:    "Disconnect the GoalChainer task board projection",
+			pathParams: []any{controllers.ProjectIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, goalchainersvc.DeleteResult{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+	}
 }
 
 // shellTerminalOperations describes the standalone shell terminal surface:
@@ -765,6 +815,7 @@ func sessionOperations() []operation {
 			summary: "Spawn a new agent session",
 			reqBody: controllers.SpawnSessionRequest{},
 			resps: []respUnit{
+				{http.StatusOK, controllers.SpawnSessionResponse{}},
 				{http.StatusCreated, controllers.SpawnSessionResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},

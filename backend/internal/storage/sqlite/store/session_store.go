@@ -32,6 +32,59 @@ func (s *Store) CreateSession(ctx context.Context, rec domain.SessionRecord) (do
 	return rec, nil
 }
 
+// CreateSessionForExternalSource atomically returns the session already bound
+// to a caller-owned task id or creates and binds a new seed session.
+func (s *Store) CreateSessionForExternalSource(
+	ctx context.Context,
+	rec domain.SessionRecord,
+	sourceTaskID string,
+) (domain.SessionRecord, bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.SessionRecord{}, false, fmt.Errorf("begin external session source: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.qw.WithTx(tx)
+	source := gen.GetSessionByExternalSourceParams{
+		ProjectID:    string(rec.ProjectID),
+		SourceTaskID: sourceTaskID,
+	}
+	existing, err := q.GetSessionByExternalSource(ctx, source)
+	if err == nil {
+		if err := tx.Commit(); err != nil {
+			return domain.SessionRecord{}, false, fmt.Errorf("commit external session lookup: %w", err)
+		}
+		return rowToRecord(existing), false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return domain.SessionRecord{}, false, fmt.Errorf("get external session source: %w", err)
+	}
+
+	num, err := q.NextSessionNum(ctx, rec.ProjectID)
+	if err != nil {
+		return domain.SessionRecord{}, false, fmt.Errorf("next session num for %s: %w", rec.ProjectID, err)
+	}
+	rec.ID = domain.SessionID(fmt.Sprintf("%s-%d", rec.ProjectID, num))
+	if err := q.InsertSession(ctx, recordToInsert(rec, num)); err != nil {
+		return domain.SessionRecord{}, false, fmt.Errorf("insert session %s: %w", rec.ID, err)
+	}
+	if err := q.InsertExternalSessionSource(ctx, gen.InsertExternalSessionSourceParams{
+		ProjectID:    string(rec.ProjectID),
+		SourceTaskID: sourceTaskID,
+		SessionID:    string(rec.ID),
+		CreatedAt:    rec.CreatedAt,
+	}); err != nil {
+		return domain.SessionRecord{}, false, fmt.Errorf("bind external session source: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.SessionRecord{}, false, fmt.Errorf("commit external session source: %w", err)
+	}
+	return rec, true, nil
+}
+
 // UpdateSession writes the full mutable state of an existing session. The
 // id/project/num/created_at are immutable and not touched here.
 func (s *Store) UpdateSession(ctx context.Context, rec domain.SessionRecord) error {

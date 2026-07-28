@@ -806,6 +806,139 @@ paths:
       summary: Replace a project's per-project config
       tags:
       - projects
+  /api/v1/projects/{id}/goalchainer:
+    delete:
+      operationId: deleteGoalChainerProjection
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GoalChainerDeleteResult'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Disconnect the GoalChainer task board projection
+      tags:
+      - goalchainer
+    get:
+      operationId: getGoalChainerProjection
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GoalChainerProjection'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the GoalChainer-owned task board projection
+      tags:
+      - goalchainer
+    put:
+      operationId: putGoalChainerProjection
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoalChainerProjection'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GoalChainerProjection'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Replace the read-only GoalChainer task board projection
+      tags:
+      - goalchainer
   /api/v1/projects/initialize:
     post:
       operationId: initializeProjectRepository
@@ -1064,6 +1197,12 @@ paths:
               $ref: '#/components/schemas/SpawnSessionRequest'
         required: true
       responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpawnSessionResponse'
+          description: OK
         "201":
           content:
             application/json:
@@ -2536,6 +2675,182 @@ components:
       required:
       - harness
       type: object
+    GoalChainerAudit:
+      properties:
+        events:
+          minimum: 0
+          type: integer
+        head:
+          pattern: ^[0-9a-f]{64}$
+          type: string
+      required:
+      - events
+      type: object
+    GoalChainerDeleteResult:
+      properties:
+        deleted:
+          type: boolean
+        ok:
+          type: boolean
+      required:
+      - ok
+      - deleted
+      type: object
+    GoalChainerProjection:
+      properties:
+        audit:
+          $ref: '#/components/schemas/GoalChainerAudit'
+        owner:
+          maxLength: 128
+          minLength: 1
+          type: string
+        planDigest:
+          pattern: ^[0-9a-f]{64}$
+          type: string
+        projectId:
+          type: string
+        protocol:
+          enum:
+          - goalchainer-ui-v1
+          type: string
+        semanticDigest:
+          pattern: ^[0-9a-f]{64}$
+          type: string
+        sourceRevision:
+          pattern: ^[0-9a-f]{64}$
+          type: string
+        summary:
+          $ref: '#/components/schemas/GoalChainerSummary'
+        tasks:
+          items:
+            $ref: '#/components/schemas/GoalChainerTask'
+          type: array
+        threadId:
+          maxLength: 128
+          minLength: 1
+          type: string
+        title:
+          maxLength: 256
+          minLength: 1
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+        usageTokens:
+          minimum: 0
+          type: integer
+      required:
+      - protocol
+      - sourceRevision
+      - threadId
+      - title
+      - owner
+      - semanticDigest
+      - planDigest
+      - usageTokens
+      - summary
+      - tasks
+      - audit
+      type: object
+    GoalChainerSummary:
+      properties:
+        backlog:
+          minimum: 0
+          type: integer
+        blocked:
+          minimum: 0
+          type: integer
+        done:
+          minimum: 0
+          type: integer
+        inProgress:
+          minimum: 0
+          type: integer
+        progressPct:
+          maximum: 100
+          minimum: 0
+          type: integer
+        ready:
+          minimum: 0
+          type: integer
+        scheduled:
+          minimum: 0
+          type: integer
+        total:
+          minimum: 0
+          type: integer
+      required:
+      - total
+      - scheduled
+      - backlog
+      - ready
+      - inProgress
+      - blocked
+      - done
+      - progressPct
+      type: object
+    GoalChainerTask:
+      properties:
+        acceptance:
+          maxLength: 128
+          minLength: 1
+          type: string
+        assignedAgent:
+          maxLength: 128
+          type: string
+        attempts:
+          minimum: 0
+          type: integer
+        capability:
+          enum:
+          - local
+          - specialist
+          - either
+          type: string
+        dependencies:
+          items:
+            type: string
+          type: array
+        id:
+          maxLength: 128
+          minLength: 1
+          type: string
+        releaseReason:
+          maxLength: 256
+          type: string
+        scheduledAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        sessionId:
+          type: string
+        stakes:
+          enum:
+          - normal
+          - high
+          type: string
+        state:
+          enum:
+          - scheduled
+          - backlog
+          - ready
+          - in-progress
+          - blocked
+          - done
+          type: string
+        upstreamBlocked:
+          type: boolean
+      required:
+      - id
+      - capability
+      - acceptance
+      - stakes
+      - dependencies
+      - state
+      - upstreamBlocked
+      - attempts
+      type: object
     ImportReport:
       properties:
         dryRun:
@@ -3710,11 +4025,16 @@ components:
         prompt:
           maxLength: 4096
           type: string
+        sourceTaskId:
+          maxLength: 128
+          type: string
       required:
       - projectId
       type: object
     SpawnSessionResponse:
       properties:
+        created:
+          type: boolean
         promptBytes:
           type: integer
         session:
@@ -3725,6 +4045,7 @@ components:
       - session
       - promptBytes
       - systemPromptBytes
+      - created
       type: object
     SubmitReviewInput:
       properties:
@@ -3918,6 +4239,8 @@ tags:
   name: agents
 - description: Project registry, configuration, and lifecycle administration
   name: projects
+- description: Read-only projections of GoalChainer-owned MeTTa task boards
+  name: goalchainer
 - description: Agent session lifecycle and messaging
   name: sessions
 - description: Pull-request actions (SCM lane)

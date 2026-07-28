@@ -21,6 +21,21 @@ type ChangeLog struct {
 	CreatedAt time.Time
 }
 
+type ExternalSessionSource struct {
+	ProjectID    string
+	SourceTaskID string
+	SessionID    string
+	CreatedAt    time.Time
+}
+
+type GoalchainerProjection struct {
+	ProjectID      domain.ProjectID
+	Protocol       string
+	SourceRevision string
+	Projection     string
+	UpdatedAt      time.Time
+}
+
 type Notification struct {
 	ID        string
 	SessionID domain.SessionID

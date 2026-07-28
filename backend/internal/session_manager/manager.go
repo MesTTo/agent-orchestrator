@@ -177,6 +177,14 @@ type Store interface {
 	DeleteSessionWorktrees(ctx context.Context, id domain.SessionID) error
 }
 
+type externalSourceStore interface {
+	CreateSessionForExternalSource(
+		ctx context.Context,
+		rec domain.SessionRecord,
+		sourceTaskID string,
+	) (domain.SessionRecord, bool, error)
+}
+
 // Manager coordinates internal session spawn, restore, kill, and cleanup over
 // the outbound ports. User-facing read-model assembly lives in the service package.
 type Manager struct {
@@ -204,6 +212,11 @@ type Manager struct {
 	newLaunchID func() string
 	resumeMu    sync.Mutex
 	resuming    map[domain.SessionID]struct{}
+	// externalSpawnMu guards one lock per caller-owned source task. Calls for
+	// the same source wait for the first launch to finish before observing the
+	// durable idempotency row. Different source tasks still launch in parallel.
+	externalSpawnMu    sync.Mutex
+	externalSpawnLocks map[string]*sync.Mutex
 	// sendConfirm bounds the best-effort post-send confirmation that the session
 	// actually became active (the agent accepted the prompt). New fills in the
 	// sendConfirm* defaults; tests in this package shrink the timings directly.
@@ -302,17 +315,18 @@ type Deps struct {
 // time.Now when Deps.Clock is nil.
 func New(d Deps) *Manager {
 	m := &Manager{
-		runtime:     d.Runtime,
-		agents:      d.Agents,
-		workspace:   d.Workspace,
-		store:       d.Store,
-		lcm:         d.Lifecycle,
-		dataDir:     d.DataDir,
-		clock:       d.Clock,
-		lookPath:    d.LookPath,
-		executable:  d.Executable,
-		newLaunchID: d.NewLaunchID,
-		resuming:    make(map[domain.SessionID]struct{}),
+		runtime:            d.Runtime,
+		agents:             d.Agents,
+		workspace:          d.Workspace,
+		store:              d.Store,
+		lcm:                d.Lifecycle,
+		dataDir:            d.DataDir,
+		clock:              d.Clock,
+		lookPath:           d.LookPath,
+		executable:         d.Executable,
+		newLaunchID:        d.NewLaunchID,
+		resuming:           make(map[domain.SessionID]struct{}),
+		externalSpawnLocks: make(map[string]*sync.Mutex),
 		sendConfirm: sendConfirmConfig{
 			pollInterval:    sendConfirmPollInterval,
 			attemptDeadline: sendConfirmAttemptDeadline,
@@ -349,48 +363,113 @@ func New(d Deps) *Manager {
 // materialization fails the still-seed row is deleted outright; a later failure
 // parks the row as terminated and rolls back what was built.
 func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	rec, promptBytes, systemPromptBytes, _, err := m.spawn(ctx, cfg)
+	return rec, promptBytes, systemPromptBytes, err
+}
+
+// SpawnFromExternalSource starts one session for a durable caller-owned task
+// key. A retry returns the existing session instead of starting another agent.
+func (m *Manager) SpawnFromExternalSource(
+	ctx context.Context,
+	cfg ports.SpawnConfig,
+) (domain.SessionRecord, int, int, bool, error) {
+	if strings.TrimSpace(cfg.SourceTaskID) == "" {
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: external source task id is required")
+	}
+	if !ports.ValidExternalSourceTaskID(cfg.SourceTaskID) {
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf(
+			"spawn: external source task id is invalid",
+		)
+	}
+	unlock := m.lockExternalSpawn(cfg.ProjectID, cfg.SourceTaskID)
+	defer unlock()
+	return m.spawn(ctx, cfg)
+}
+
+func (m *Manager) lockExternalSpawn(
+	projectID domain.ProjectID,
+	sourceTaskID string,
+) func() {
+	key := string(projectID) + "\x00" + sourceTaskID
+	m.externalSpawnMu.Lock()
+	mu, ok := m.externalSpawnLocks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		m.externalSpawnLocks[key] = mu
+	}
+	m.externalSpawnMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
+}
+
+func (m *Manager) spawn(
+	ctx context.Context,
+	cfg ports.SpawnConfig,
+) (domain.SessionRecord, int, int, bool, error) {
 	project, err := m.loadProject(ctx, cfg.ProjectID)
 	if err != nil {
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: %w", err)
 	}
 	projectKind := project.Kind.WithDefault()
 	if projectKind == domain.ProjectKindScratch && strings.TrimSpace(cfg.Branch) != "" {
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrScratchBranchUnsupported)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: %w", ErrScratchBranchUnsupported)
 	}
 	// A per-project role override picks the harness when the spawn names none,
 	// so a project can default workers to one agent and orchestrators to another.
 	cfg.Harness = effectiveHarness(cfg.Harness, cfg.Kind, project.Config)
 	if cfg.Harness == "" {
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: configure project %s.agent or pass --harness", ErrMissingHarness, roleConfigName(cfg.Kind))
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: %w: configure project %s.agent or pass --harness", ErrMissingHarness, roleConfigName(cfg.Kind))
 	}
 
 	// Reject an unknown harness before any durable state is created. Doing this
 	// after CreateSession would leave a terminated orphan row and waste a
 	// worktree on a spawn that can never launch.
 	if _, ok := m.agents.Agent(cfg.Harness); !ok {
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %q", ErrUnknownHarness, cfg.Harness)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: %w: %q", ErrUnknownHarness, cfg.Harness)
 	}
 
 	if err := m.validateRuntimePrerequisites(); err != nil {
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: %w", err)
 	}
 
 	prompt, systemPrompt, err := m.buildSpawnTexts(ctx, cfg)
 	if err != nil {
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: prompt: %w", err)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: prompt: %w", err)
 	}
 	promptBytes := len(prompt)
 	systemPromptBytes := len(systemPrompt)
 
-	rec, err := m.store.CreateSession(ctx, seedRecord(cfg, m.clock()))
+	seed := seedRecord(cfg, m.clock())
+	rec := domain.SessionRecord{}
+	created := true
+	if cfg.SourceTaskID == "" {
+		rec, err = m.store.CreateSession(ctx, seed)
+	} else if sourceStore, ok := m.store.(externalSourceStore); ok {
+		rec, created, err = sourceStore.CreateSessionForExternalSource(
+			ctx,
+			seed,
+			cfg.SourceTaskID,
+		)
+	} else {
+		err = errors.New("session store does not support external source ids")
+	}
 	if err != nil {
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: create: %w", err)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: create: %w", err)
+	}
+	if !created {
+		if !rec.IsTerminated &&
+			strings.TrimSpace(rec.Metadata.RuntimeHandleID) == "" {
+			return domain.SessionRecord{}, 0, 0, false, errors.New(
+				"spawn: external source session is not ready",
+			)
+		}
+		return rec, len(rec.Metadata.Prompt), 0, false, nil
 	}
 	id := rec.ID
 	systemPromptFile, err := m.prepareSystemPromptFile(id, cfg.Harness, systemPrompt)
 	if err != nil {
 		m.rollbackSpawnSeedRow(ctx, id)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: system prompt file: %w", id, err)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: system prompt file: %w", id, err)
 	}
 
 	branch := cfg.Branch
@@ -403,14 +482,14 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		// row is deleted outright instead of accumulating as a terminated orphan
 		// in session lists (e.g. when gitworktree refuses the branch).
 		m.rollbackSpawnSeedRow(ctx, id)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: workspace: %w", id, err)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: workspace: %w", id, err)
 	}
 
 	// Per-project workspace provisioning: symlink shared files, then run any
 	// post-create commands (e.g. `pnpm install`) before the agent launches.
 	if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: provision: %w", id, err)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: provision: %w", id, err)
 	}
 
 	// CLI agents receive the prompt as text and cannot consume inline binary
@@ -422,7 +501,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		refs, err := writeSpawnAttachments(ws.Path, cfg.Attachments)
 		if err != nil {
 			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false)
-			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: attachments: %w", id, err)
+			return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: attachments: %w", id, err)
 		}
 		// Keep the attachments dir out of git status. Best-effort: the images are
 		// already written and usable, so an exclude failure must not fail the spawn.
@@ -435,14 +514,14 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	agent, ok := m.agents.Agent(cfg.Harness)
 	if !ok {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: no agent adapter for harness %q", id, cfg.Harness)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: no agent adapter for harness %q", id, cfg.Harness)
 	}
 	agentConfig := effectiveAgentConfig(cfg.Kind, project.Config)
 	env := m.runtimeEnv(id, cfg.ProjectID, cfg.IssueID, project.Config.Env)
 	m.augmentAgentRuntimeEnv(agent, env)
 	if err := m.prepareWorkspace(ctx, agent, id, ws.Path, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, err)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: %w", id, err)
 	}
 	launchCfg := ports.LaunchConfig{
 		DataDir:          m.dataDir,
@@ -459,7 +538,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: prompt delivery: %w", id, err)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: prompt delivery: %w", id, err)
 	}
 	if delivery == ports.PromptDeliveryAfterStart {
 		launchCfg.Prompt = ""
@@ -467,7 +546,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	argv, err := agent.GetLaunchCommand(ctx, launchCfg)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: launch command: %w", id, err)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: launch command: %w", id, err)
 	}
 	// Pre-flight: confirm argv[0] actually exists on PATH (or as an absolute
 	// path the adapter returned) BEFORE handing the launch to the runtime.
@@ -475,17 +554,17 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// unresolved binary would leak through as a "live" session that never ran.
 	if err := m.validateAgentBinary(argv); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, err)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: %w", id, err)
 	}
 	m.augmentRuntimePATHForLaunchBinary(ctx, env, argv)
 	argv, launchID, err := m.superviseAgentProcess(agent, id, env, argv)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: supervisor: %w", id, err)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: supervisor: %w", id, err)
 	}
 	if err := m.lcm.PrepareLaunch(id, launchID); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: prepare launch: %w", id, err)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: prepare launch: %w", id, err)
 	}
 	defer m.lcm.CancelLaunch(id, launchID)
 	handle, err := m.runtime.Create(ctx, ports.RuntimeConfig{
@@ -496,7 +575,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	})
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: runtime: %w", id, err)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: runtime: %w", id, err)
 	}
 
 	metadata := domain.SessionMetadata{
@@ -511,7 +590,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		runtimeDestroyed := m.runtime.Destroy(ctx, handle) == nil
 		m.rollbackPreparedSpawnWorkspace(ctx, rec, ws, workspaceProject, runtimeDestroyed)
 		m.markSpawnFailedTerminated(ctx, id)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: completed: %w", id, err)
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: completed: %w", id, err)
 	}
 	if delivery == ports.PromptDeliveryAfterStart && prompt != "" {
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, id, prompt); err != nil {
@@ -522,14 +601,14 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			} else {
 				m.markSpawnFailedTerminated(ctx, id)
 			}
-			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: deliver prompt: %w", id, err)
+			return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn %s: deliver prompt: %w", id, err)
 		}
 	}
 	rec, err = m.getRecord(ctx, id)
 	if err != nil {
-		return domain.SessionRecord{}, 0, 0, err
+		return domain.SessionRecord{}, 0, 0, false, err
 	}
-	return rec, promptBytes, systemPromptBytes, nil
+	return rec, promptBytes, systemPromptBytes, true, nil
 }
 
 // loadProject loads the project record so spawn can resolve its per-project

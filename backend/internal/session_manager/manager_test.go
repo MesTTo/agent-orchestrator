@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,6 +46,36 @@ func newFakeStore() *fakeStore {
 		workspaceRepo: map[string][]domain.WorkspaceRepoRecord{},
 		worktrees:     map[domain.SessionID][]domain.SessionWorktreeRecord{},
 	}
+}
+
+type blockingExternalStore struct {
+	*fakeStore
+	mu       sync.Mutex
+	sources  map[string]domain.SessionID
+	entered  chan struct{}
+	release  chan struct{}
+	waitOnce sync.Once
+}
+
+func (f *blockingExternalStore) CreateSessionForExternalSource(
+	ctx context.Context,
+	rec domain.SessionRecord,
+	sourceTaskID string,
+) (domain.SessionRecord, bool, error) {
+	f.entered <- struct{}{}
+	f.waitOnce.Do(func() { <-f.release })
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := string(rec.ProjectID) + "\x00" + sourceTaskID
+	if id, ok := f.sources[key]; ok {
+		return f.sessions[id], false, nil
+	}
+	created, err := f.CreateSession(ctx, rec)
+	if err != nil {
+		return domain.SessionRecord{}, false, err
+	}
+	f.sources[key] = created.ID
+	return created, true, nil
 }
 func (f *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectRecord, bool, error) {
 	r, ok := f.projects[id]
@@ -815,6 +846,67 @@ func TestSpawn_ResolvesProjectConfig(t *testing.T) {
 	}
 	if !agent.lastConfig.IsZero() {
 		t.Fatalf("launch config = %#v, want zero for project without config", agent.lastConfig)
+	}
+}
+
+func TestSpawnFromExternalSourceSerializesTheSameTask(t *testing.T) {
+	base := newFakeStore()
+	base.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	store := &blockingExternalStore{
+		fakeStore: base,
+		sources:   make(map[string]domain.SessionID),
+		entered:   make(chan struct{}, 2),
+		release:   make(chan struct{}),
+	}
+	runtime := &fakeRuntime{}
+	manager := New(Deps{
+		Runtime: runtime, Agents: fakeAgents{}, Workspace: &fakeWorkspace{},
+		Store: store, Messenger: &fakeMessenger{},
+		Lifecycle: &fakeLCM{store: base},
+		LookPath:  func(string) (string, error) { return "/bin/true", nil },
+	})
+	cfg := ports.SpawnConfig{
+		ProjectID:    "mer",
+		Kind:         domain.KindWorker,
+		SourceTaskID: "goalchainer:incident:collect:1",
+	}
+	type result struct {
+		record  domain.SessionRecord
+		created bool
+		err     error
+	}
+	results := make(chan result, 2)
+	spawn := func() {
+		record, _, _, created, err := manager.SpawnFromExternalSource(
+			t.Context(),
+			cfg,
+		)
+		results <- result{record: record, created: created, err: err}
+	}
+
+	go spawn()
+	<-store.entered
+	go spawn()
+	select {
+	case <-store.entered:
+		t.Fatal("second spawn reached the store before the first launch finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(store.release)
+	first := <-results
+	second := <-results
+
+	if first.err != nil || second.err != nil {
+		t.Fatalf("spawn errors = %v, %v", first.err, second.err)
+	}
+	if first.record.ID != second.record.ID {
+		t.Fatalf("session ids = %q, %q", first.record.ID, second.record.ID)
+	}
+	if first.created == second.created {
+		t.Fatalf("created flags = %v, %v; want one creator", first.created, second.created)
+	}
+	if runtime.created != 1 {
+		t.Fatalf("runtime.Create called %d times, want 1", runtime.created)
 	}
 }
 

@@ -2,6 +2,7 @@ package ports
 
 import (
 	"errors"
+	"regexp"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -9,11 +10,23 @@ import (
 // ErrSessionNotFound reports an observation for an unknown session id.
 var ErrSessionNotFound = errors.New("session not found")
 
+var externalSourceTaskIDPattern = regexp.MustCompile(
+	`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`,
+)
+
+// ValidExternalSourceTaskID checks the durable caller-owned session key.
+func ValidExternalSourceTaskID(value string) bool {
+	return externalSourceTaskIDPattern.MatchString(value)
+}
+
 // SpawnConfig is the request to start a new session: which project/issue, which
 // agent harness, and the branch/prompt the agent launches with.
 type SpawnConfig struct {
 	ProjectID domain.ProjectID
 	IssueID   domain.IssueID
+	// SourceTaskID is a caller-owned idempotency key for an externally
+	// scheduled task. Empty keeps the normal always-create spawn behavior.
+	SourceTaskID string
 	// IssueContext is optional pre-fetched tracker context for the task prompt.
 	// Standing rules stay in SystemPrompt; issue facts belong to the user task.
 	IssueContext string

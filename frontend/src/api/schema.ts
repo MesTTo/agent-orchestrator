@@ -332,6 +332,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/goalchainer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the GoalChainer-owned task board projection */
+        get: operations["getGoalChainerProjection"];
+        /** Replace the read-only GoalChainer task board projection */
+        put: operations["putGoalChainerProjection"];
+        post?: never;
+        /** Disconnect the GoalChainer task board projection */
+        delete: operations["deleteGoalChainerProjection"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/initialize": {
         parameters: {
             query?: never;
@@ -922,6 +941,59 @@ export interface components {
         DomainReviewerConfig: {
             harness: string;
         };
+        GoalChainerAudit: {
+            events: number;
+            head?: string;
+        };
+        GoalChainerDeleteResult: {
+            deleted: boolean;
+            ok: boolean;
+        };
+        GoalChainerProjection: {
+            audit: components["schemas"]["GoalChainerAudit"];
+            owner: string;
+            planDigest: string;
+            projectId?: string;
+            /** @enum {string} */
+            protocol: "goalchainer-ui-v1";
+            semanticDigest: string;
+            sourceRevision: string;
+            summary: components["schemas"]["GoalChainerSummary"];
+            tasks: components["schemas"]["GoalChainerTask"][];
+            threadId: string;
+            title: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            usageTokens: number;
+        };
+        GoalChainerSummary: {
+            backlog: number;
+            blocked: number;
+            done: number;
+            inProgress: number;
+            progressPct: number;
+            ready: number;
+            scheduled: number;
+            total: number;
+        };
+        GoalChainerTask: {
+            acceptance: string;
+            assignedAgent?: string;
+            attempts: number;
+            /** @enum {string} */
+            capability: "local" | "specialist" | "either";
+            dependencies: string[];
+            id: string;
+            releaseReason?: string;
+            /** Format: date-time */
+            scheduledAt?: null | string;
+            sessionId?: string;
+            /** @enum {string} */
+            stakes: "normal" | "high";
+            /** @enum {string} */
+            state: "scheduled" | "backlog" | "ready" | "in-progress" | "blocked" | "done";
+            upstreamBlocked: boolean;
+        };
         ImportReport: {
             dryRun: boolean;
             notes?: string[];
@@ -1376,8 +1448,10 @@ export interface components {
             kind?: "worker" | "orchestrator";
             projectId: string;
             prompt?: string;
+            sourceTaskId?: string;
         };
         SpawnSessionResponse: {
+            created: boolean;
             promptBytes: number;
             session: components["schemas"]["ControllersSessionView"];
             systemPromptBytes: number;
@@ -2538,6 +2612,178 @@ export interface operations {
             };
         };
     };
+    getGoalChainerProjection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (registry key). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoalChainerProjection"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    putGoalChainerProjection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (registry key). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoalChainerProjection"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoalChainerProjection"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    deleteGoalChainerProjection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (registry key). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoalChainerDeleteResult"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     initializeProjectRepository: {
         parameters: {
             query?: never;
@@ -2850,6 +3096,15 @@ export interface operations {
             };
         };
         responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpawnSessionResponse"];
+                };
+            };
             /** @description Created */
             201: {
                 headers: {

@@ -63,6 +63,14 @@ func (f *fakeSessionService) Spawn(_ context.Context, cfg ports.SpawnConfig) (do
 	}, len(cfg.Prompt), 0, nil
 }
 
+func (f *fakeSessionService) SpawnFromExternalSource(
+	ctx context.Context,
+	cfg ports.SpawnConfig,
+) (domain.Session, int, int, bool, error) {
+	session, promptBytes, systemPromptBytes, err := f.Spawn(ctx, cfg)
+	return session, promptBytes, systemPromptBytes, true, err
+}
+
 func (f *fakeSessionService) SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, _ bool) (domain.Session, error) {
 	s, _, _, err := f.Spawn(ctx, ports.SpawnConfig{ProjectID: projectID, Kind: domain.KindOrchestrator})
 	return s, err

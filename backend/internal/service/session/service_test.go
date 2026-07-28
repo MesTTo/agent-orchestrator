@@ -553,6 +553,13 @@ func (f *fakeCommander) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.
 	}
 	return domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}, len(cfg.Prompt), 0, nil
 }
+func (f *fakeCommander) SpawnFromExternalSource(
+	ctx context.Context,
+	cfg ports.SpawnConfig,
+) (domain.SessionRecord, int, int, bool, error) {
+	rec, promptBytes, systemPromptBytes, err := f.Spawn(ctx, cfg)
+	return rec, promptBytes, systemPromptBytes, true, err
+}
 func (f *fakeCommander) RestoreWithMode(context.Context, domain.SessionID) (sessionmanager.RestoreResult, error) {
 	if f.restoreErr != nil {
 		return sessionmanager.RestoreResult{}, f.restoreErr

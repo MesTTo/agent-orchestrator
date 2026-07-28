@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	goalchainersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/goalchainer"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
@@ -21,6 +22,7 @@ import (
 type APIDeps struct {
 	Agents             controllers.AgentCatalog
 	Projects           projectsvc.Manager
+	GoalChainer        goalchainersvc.Manager
 	Sessions           controllers.SessionService
 	Activity           controllers.ActivityRecorder
 	PRs                prsvc.ActionManager
@@ -43,6 +45,7 @@ type API struct {
 	cfg           config.Config
 	agents        *controllers.AgentsController
 	projects      *controllers.ProjectsController
+	goalchainer   *controllers.GoalChainerController
 	sessions      *controllers.SessionsController
 	prs           *controllers.PRsController
 	reviews       *controllers.ReviewsController
@@ -65,6 +68,9 @@ func NewAPI(cfg config.Config, deps APIDeps) *API {
 		},
 		projects: &controllers.ProjectsController{
 			Mgr: deps.Projects,
+		},
+		goalchainer: &controllers.GoalChainerController{
+			Mgr: deps.GoalChainer,
 		},
 		sessions: &controllers.SessionsController{
 			Svc:      deps.Sessions,
@@ -97,6 +103,7 @@ func (a *API) Register(root chi.Router) {
 			r.Use(middleware.Timeout(timeout))
 			a.agents.Register(r)
 			a.projects.Register(r)
+			a.goalchainer.Register(r)
 			a.sessions.Register(r)
 			a.prs.Register(r)
 			a.reviews.Register(r)

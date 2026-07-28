@@ -27,6 +27,7 @@ import (
 
 type fakeSessionService struct {
 	sessions        map[domain.SessionID]domain.Session
+	sourceSessions  map[string]domain.Session
 	sent            string
 	cleanupProjects []domain.ProjectID
 	cleanupResult   []domain.SessionID
@@ -42,7 +43,10 @@ type fakeSessionService struct {
 func newFakeSessionService() *fakeSessionService {
 	now := time.Now().UTC()
 	s := domain.Session{SessionRecord: domain.SessionRecord{ID: "ao-1", ProjectID: "ao", Kind: domain.KindWorker, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}, CreatedAt: now, UpdatedAt: now}, Status: domain.StatusIdle, TerminalHandleID: "ao-1/terminal_0"}
-	return &fakeSessionService{sessions: map[domain.SessionID]domain.Session{s.ID: s}}
+	return &fakeSessionService{
+		sessions:       map[domain.SessionID]domain.Session{s.ID: s},
+		sourceSessions: make(map[string]domain.Session),
+	}
 }
 
 func (f *fakeSessionService) List(_ context.Context, filter sessionsvc.ListFilter) ([]domain.Session, error) {
@@ -70,6 +74,21 @@ func (f *fakeSessionService) Spawn(_ context.Context, cfg ports.SpawnConfig) (do
 	s := domain.Session{SessionRecord: domain.SessionRecord{ID: domain.SessionID(string(cfg.ProjectID) + "-2"), ProjectID: cfg.ProjectID, IssueID: cfg.IssueID, Kind: cfg.Kind, Harness: cfg.Harness, DisplayName: cfg.DisplayName, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}, CreatedAt: now, UpdatedAt: now}, Status: domain.StatusIdle}
 	f.sessions[s.ID] = s
 	return s, len(cfg.Prompt), 0, nil
+}
+
+func (f *fakeSessionService) SpawnFromExternalSource(
+	ctx context.Context,
+	cfg ports.SpawnConfig,
+) (domain.Session, int, int, bool, error) {
+	key := string(cfg.ProjectID) + "\x00" + cfg.SourceTaskID
+	if session, ok := f.sourceSessions[key]; ok {
+		return session, len(session.Metadata.Prompt), 0, false, nil
+	}
+	session, promptBytes, systemPromptBytes, err := f.Spawn(ctx, cfg)
+	if err == nil {
+		f.sourceSessions[key] = session
+	}
+	return session, promptBytes, systemPromptBytes, true, err
 }
 
 func (f *fakeSessionService) SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, clean bool) (domain.Session, error) {
@@ -460,6 +479,34 @@ func TestSessionsAPI_ListSpawnGetAndActions(t *testing.T) {
 	body, status, _ = doRequest(t, srv, "POST", "/api/v1/orchestrators", `{"projectId":"ao"}`)
 	if status != http.StatusCreated {
 		t.Fatalf("orchestrator = %d, want 201; body=%s", status, body)
+	}
+}
+
+func TestSpawnSessionExternalSourceIsIdempotent(t *testing.T) {
+	srv := newSessionTestServer(t, newFakeSessionService())
+	request := `{"projectId":"ao","issueId":"collect","sourceTaskId":"gc:incident:collect:1","kind":"worker","harness":"codex","prompt":"collect evidence"}`
+
+	first, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", request)
+	if status != http.StatusCreated {
+		t.Fatalf("first spawn = %d, body=%s", status, first)
+	}
+	second, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", request)
+	if status != http.StatusOK {
+		t.Fatalf("retry spawn = %d, body=%s", status, second)
+	}
+	var firstBody, secondBody struct {
+		Session struct {
+			ID domain.SessionID `json:"id"`
+		} `json:"session"`
+		Created bool `json:"created"`
+	}
+	mustJSON(t, first, &firstBody)
+	mustJSON(t, second, &secondBody)
+	if !firstBody.Created || secondBody.Created {
+		t.Fatalf("created flags = first %v, second %v", firstBody.Created, secondBody.Created)
+	}
+	if firstBody.Session.ID == "" || firstBody.Session.ID != secondBody.Session.ID {
+		t.Fatalf("session ids = first %q, second %q", firstBody.Session.ID, secondBody.Session.ID)
 	}
 }
 
