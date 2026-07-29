@@ -21,13 +21,19 @@ func (s *Store) CreateSession(ctx context.Context, rec domain.SessionRecord) (do
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	num, err := s.qw.NextSessionNum(ctx, rec.ProjectID)
+	err := s.inTx(ctx, "create session", func(q *gen.Queries) error {
+		num, err := q.NextSessionNum(ctx, rec.ProjectID)
+		if err != nil {
+			return fmt.Errorf("next session num for %s: %w", rec.ProjectID, err)
+		}
+		rec.ID = domain.SessionID(fmt.Sprintf("%s-%d", rec.ProjectID, num))
+		if err := q.InsertSession(ctx, recordToInsert(rec, num)); err != nil {
+			return fmt.Errorf("insert session %s: %w", rec.ID, err)
+		}
+		return insertProjectAgentAttempt(ctx, q, &rec)
+	})
 	if err != nil {
-		return domain.SessionRecord{}, fmt.Errorf("next session num for %s: %w", rec.ProjectID, err)
-	}
-	rec.ID = domain.SessionID(fmt.Sprintf("%s-%d", rec.ProjectID, num))
-	if err := s.qw.InsertSession(ctx, recordToInsert(rec, num)); err != nil {
-		return domain.SessionRecord{}, fmt.Errorf("insert session %s: %w", rec.ID, err)
+		return domain.SessionRecord{}, err
 	}
 	return rec, nil
 }
@@ -54,10 +60,14 @@ func (s *Store) CreateSessionForExternalSource(
 	}
 	existing, err := q.GetSessionByExternalSource(ctx, source)
 	if err == nil {
+		record := rowToRecord(existing)
+		if err := loadAndCheckExternalProjectAgent(ctx, q, &record, rec.ProjectAgentID); err != nil {
+			return domain.SessionRecord{}, false, err
+		}
 		if err := tx.Commit(); err != nil {
 			return domain.SessionRecord{}, false, fmt.Errorf("commit external session lookup: %w", err)
 		}
-		return rowToRecord(existing), false, nil
+		return record, false, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return domain.SessionRecord{}, false, fmt.Errorf("get external session source: %w", err)
@@ -79,8 +89,41 @@ func (s *Store) CreateSessionForExternalSource(
 	}); err != nil {
 		return domain.SessionRecord{}, false, fmt.Errorf("bind external session source: %w", err)
 	}
+	if err := insertProjectAgentAttempt(ctx, q, &rec); err != nil {
+		return domain.SessionRecord{}, false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return domain.SessionRecord{}, false, fmt.Errorf("commit external session source: %w", err)
+	}
+	return rec, true, nil
+}
+
+// GetSessionForExternalSource returns an existing source-task binding without
+// creating a session. Session Manager uses it to resolve idempotent replays
+// before generating any new stable project-agent identity.
+func (s *Store) GetSessionForExternalSource(
+	ctx context.Context,
+	projectID domain.ProjectID,
+	sourceTaskID string,
+) (domain.SessionRecord, bool, error) {
+	row, err := s.qr.GetSessionByExternalSource(ctx, gen.GetSessionByExternalSourceParams{
+		ProjectID:    string(projectID),
+		SourceTaskID: sourceTaskID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.SessionRecord{}, false, nil
+	}
+	if err != nil {
+		return domain.SessionRecord{}, false, fmt.Errorf(
+			"get external session source %s/%s: %w",
+			projectID,
+			sourceTaskID,
+			err,
+		)
+	}
+	rec := rowToRecord(row)
+	if err := attachProjectAgentAttempt(ctx, s.qr, &rec); err != nil {
+		return domain.SessionRecord{}, false, err
 	}
 	return rec, true, nil
 }
@@ -228,7 +271,11 @@ func (s *Store) GetSession(ctx context.Context, id domain.SessionID) (domain.Ses
 	if err != nil {
 		return domain.SessionRecord{}, false, fmt.Errorf("get session %s: %w", id, err)
 	}
-	return rowToRecord(row), true, nil
+	rec := rowToRecord(row)
+	if err := attachProjectAgentAttempt(ctx, s.qr, &rec); err != nil {
+		return domain.SessionRecord{}, false, err
+	}
+	return rec, true, nil
 }
 
 // ListSessions returns every session in a project, ordered by num.
@@ -237,7 +284,13 @@ func (s *Store) ListSessions(ctx context.Context, project domain.ProjectID) ([]d
 	if err != nil {
 		return nil, fmt.Errorf("list sessions for %s: %w", project, err)
 	}
-	return mapSessionRows(rows), nil
+	records := mapSessionRows(rows)
+	attempts, err := s.qr.ListProjectAgentAttemptsByProject(ctx, project)
+	if err != nil {
+		return nil, fmt.Errorf("list project agent attempts for %s: %w", project, err)
+	}
+	attachProjectAgentAttempts(records, attempts)
+	return records, nil
 }
 
 // ListAllSessions returns every session across all projects.
@@ -246,7 +299,113 @@ func (s *Store) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, er
 	if err != nil {
 		return nil, fmt.Errorf("list all sessions: %w", err)
 	}
-	return mapSessionRows(rows), nil
+	records := mapSessionRows(rows)
+	attempts, err := s.qr.ListAllProjectAgentAttempts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list all project agent attempts: %w", err)
+	}
+	attachProjectAgentAttempts(records, attempts)
+	return records, nil
+}
+
+func insertProjectAgentAttempt(
+	ctx context.Context,
+	q *gen.Queries,
+	rec *domain.SessionRecord,
+) error {
+	if rec.ProjectAgentID == "" {
+		return nil
+	}
+	attempt, err := q.NextProjectAgentAttemptNumber(
+		ctx,
+		gen.NextProjectAgentAttemptNumberParams{
+			ProjectID:      rec.ProjectID,
+			ProjectAgentID: rec.ProjectAgentID,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"next project agent attempt for %s/%s: %w",
+			rec.ProjectID,
+			rec.ProjectAgentID,
+			err,
+		)
+	}
+	if err := q.InsertProjectAgentAttempt(ctx, gen.InsertProjectAgentAttemptParams{
+		ProjectID:      rec.ProjectID,
+		ProjectAgentID: rec.ProjectAgentID,
+		AttemptNumber:  attempt,
+		SessionID:      rec.ID,
+		CreatedAt:      rec.CreatedAt,
+	}); err != nil {
+		return fmt.Errorf("insert project agent attempt for session %s: %w", rec.ID, err)
+	}
+	rec.ProjectAgentAttempt = attempt
+	return nil
+}
+
+func loadAndCheckExternalProjectAgent(
+	ctx context.Context,
+	q *gen.Queries,
+	rec *domain.SessionRecord,
+	requested domain.ProjectAgentID,
+) error {
+	attempt, err := q.GetProjectAgentAttemptBySession(ctx, rec.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		if requested == "" {
+			return nil
+		}
+		return &domain.ExternalProjectAgentMismatchError{
+			SessionID:        rec.ID,
+			RequestedAgentID: requested,
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("get project agent attempt for session %s: %w", rec.ID, err)
+	}
+	rec.ProjectAgentID = attempt.ProjectAgentID
+	rec.ProjectAgentAttempt = attempt.AttemptNumber
+	if attempt.ProjectAgentID != requested {
+		return &domain.ExternalProjectAgentMismatchError{
+			SessionID:        rec.ID,
+			ExistingAgentID:  attempt.ProjectAgentID,
+			RequestedAgentID: requested,
+		}
+	}
+	return nil
+}
+
+func attachProjectAgentAttempt(
+	ctx context.Context,
+	q *gen.Queries,
+	rec *domain.SessionRecord,
+) error {
+	attempt, err := q.GetProjectAgentAttemptBySession(ctx, rec.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get project agent attempt for session %s: %w", rec.ID, err)
+	}
+	rec.ProjectAgentID = attempt.ProjectAgentID
+	rec.ProjectAgentAttempt = attempt.AttemptNumber
+	return nil
+}
+
+func attachProjectAgentAttempts(
+	records []domain.SessionRecord,
+	attempts []gen.ProjectAgentSessionAttempt,
+) {
+	bySession := make(map[domain.SessionID]gen.ProjectAgentSessionAttempt, len(attempts))
+	for _, attempt := range attempts {
+		bySession[attempt.SessionID] = attempt
+	}
+	for i := range records {
+		if attempt, ok := bySession[records[i].ID]; ok {
+			records[i].ProjectAgentID = attempt.ProjectAgentID
+			records[i].ProjectAgentAttempt = attempt.AttemptNumber
+		}
+	}
 }
 
 func mapSessionRows(rows []gen.Session) []domain.SessionRecord {

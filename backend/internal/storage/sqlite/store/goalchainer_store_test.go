@@ -62,6 +62,40 @@ func TestGoalChainerProjectionPersistsIdempotentlyAndEmitsCDC(t *testing.T) {
 	assertGoalChainerEventCount(t, events, 3)
 }
 
+func TestGoalChainerV2ProjectionPersistsWithoutChangingTheCDCContract(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, store, "goalchainer")
+	record := domain.GoalChainerProjectionRecord{
+		ProjectID:      "goalchainer",
+		Protocol:       "goalchainer-ui-v2",
+		SourceRevision: "a3c0c8a6e6a6c9308f32af7fd614159fd64a35f9ce90f9b443f350b3887275fa",
+		Projection:     `{"protocol":"goalchainer-ui-v2","projectId":"goalchainer","agents":[{"agentKey":"worker","role":"worker"}]}`,
+		UpdatedAt:      time.Date(2026, 7, 29, 4, 0, 0, 0, time.UTC),
+	}
+
+	saved, err := store.UpsertGoalChainerProjection(ctx, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Protocol != "goalchainer-ui-v2" ||
+		saved.Projection != record.Projection {
+		t.Fatalf("saved v2 record = %#v", saved)
+	}
+	loaded, err := store.GetGoalChainerProjection(ctx, "goalchainer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Protocol != record.Protocol || loaded.Projection != record.Projection {
+		t.Fatalf("loaded v2 record = %#v", loaded)
+	}
+	events, err := store.EventsAfter(ctx, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGoalChainerEventCount(t, events, 1)
+}
+
 func assertGoalChainerEventCount(t *testing.T, events []cdc.Event, want int) {
 	t.Helper()
 	got := 0

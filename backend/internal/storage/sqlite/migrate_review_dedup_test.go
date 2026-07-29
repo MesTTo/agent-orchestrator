@@ -8,9 +8,9 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// upTo migrates the db to a specific goose version, sharing migrate()'s goose
-// global setup under gooseMu.
-func upTo(t *testing.T, db *sql.DB, version int64) {
+// runGoose serializes a migration operation around goose's process-global
+// configuration.
+func runGoose(t *testing.T, operation func() error) error {
 	t.Helper()
 	gooseMu.Lock()
 	defer gooseMu.Unlock()
@@ -19,7 +19,15 @@ func upTo(t *testing.T, db *sql.DB, version int64) {
 	if err := goose.SetDialect("sqlite3"); err != nil {
 		t.Fatalf("set dialect: %v", err)
 	}
-	if err := goose.UpTo(db, "migrations", version); err != nil {
+	return operation()
+}
+
+// upTo migrates the db to a specific goose version.
+func upTo(t *testing.T, db *sql.DB, version int64) {
+	t.Helper()
+	if err := runGoose(t, func() error {
+		return goose.UpTo(db, "migrations", version)
+	}); err != nil {
 		t.Fatalf("migrate to %d: %v", version, err)
 	}
 }

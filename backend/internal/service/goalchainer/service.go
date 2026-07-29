@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,17 @@ import (
 const maxProjectionBytes = 1 << 20
 
 var safeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+
+var v2SessionStatuses = map[string]struct{}{
+	"working": {}, "pr_open": {}, "draft": {}, "ci_failed": {},
+	"review_pending": {}, "changes_requested": {}, "approved": {},
+	"mergeable": {}, "merged": {}, "needs_input": {}, "exited": {},
+	"idle": {}, "terminated": {}, "no_signal": {},
+}
+
+var v2ActivityStates = map[string]struct{}{
+	"active": {}, "idle": {}, "waiting_input": {}, "blocked": {}, "exited": {},
+}
 
 // Store is the durable projection surface required by Service.
 type Store interface {
@@ -77,7 +89,7 @@ func (s *Service) Put(
 	if err := validateProjectID(projectID); err != nil {
 		return Projection{}, err
 	}
-	if err := validateProjection(projection); err != nil {
+	if err := validateProjectionForProject(projectID, projection); err != nil {
 		return Projection{}, err
 	}
 	exists, err := s.store.GoalChainerProjectExists(ctx, projectID)
@@ -87,7 +99,9 @@ func (s *Service) Put(
 	if !exists {
 		return Projection{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
 	}
-	projection.ProjectID = ""
+	if projection.Protocol == ProtocolV1 {
+		projection.ProjectID = ""
+	}
 	projection.UpdatedAt = time.Time{}
 	body, err := json.Marshal(projection)
 	if err != nil {
@@ -138,8 +152,8 @@ func validateProjectID(projectID domain.ProjectID) error {
 }
 
 func validateProjection(projection Projection) error {
-	if projection.Protocol != Protocol {
-		return invalidProjection("protocol must be goalchainer-ui-v1")
+	if projection.Protocol != ProtocolV1 && projection.Protocol != ProtocolV2 {
+		return invalidProjection("protocol must be goalchainer-ui-v1 or goalchainer-ui-v2")
 	}
 	for name, digest := range map[string]string{
 		"sourceRevision": projection.SourceRevision,
@@ -209,6 +223,234 @@ func validateProjection(projection Projection) error {
 	}
 	if summary.Progress != expectedProgress {
 		return invalidProjection("progressPct must match the done task count")
+	}
+	if projection.Protocol == ProtocolV1 {
+		return validateV1Projection(projection)
+	}
+	if err := validateV2Projection(projection); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateProjectionForProject(
+	projectID domain.ProjectID,
+	projection Projection,
+) error {
+	if err := validateProjection(projection); err != nil {
+		return err
+	}
+	if projection.Protocol == ProtocolV2 && projection.ProjectID != projectID {
+		return invalidProjection("v2 projectId must match the route project")
+	}
+	return nil
+}
+
+func validateV1Projection(projection Projection) error {
+	if len(projection.Agents) != 0 {
+		return invalidProjection("v1 projections cannot contain agents")
+	}
+	for _, task := range projection.Tasks {
+		if task.AssignedRole != "" || task.AgentKey != "" || task.AgentID != "" ||
+			len(task.SessionAttempts) != 0 || len(task.AtomspaceLinks) != 0 {
+			return invalidProjection("v1 tasks cannot contain v2 project-agent fields")
+		}
+	}
+	return nil
+}
+
+func validateV2Projection(projection Projection) error {
+	if !safeID.MatchString(string(projection.ProjectID)) {
+		return invalidProjection("v2 projectId must be a safe identifier")
+	}
+	if len(projection.Agents) == 0 {
+		return invalidProjection("v2 projections require declared agents")
+	}
+	agents := make(map[domain.ProjectAgentKey]Agent, len(projection.Agents))
+	roles := make(map[domain.ProjectAgentRole]struct{}, len(projection.Agents))
+	agentIDs := make(map[domain.ProjectAgentID]struct{}, len(projection.Agents))
+	for _, agent := range projection.Agents {
+		if !domain.ValidProjectAgentKey(agent.AgentKey) ||
+			!domain.ValidProjectAgentRole(agent.Role) {
+			return invalidProjection("v2 agent keys and roles must be safe identifiers")
+		}
+		if _, duplicate := agents[agent.AgentKey]; duplicate {
+			return invalidProjection("v2 agent keys must be unique")
+		}
+		if _, duplicate := roles[agent.Role]; duplicate {
+			return invalidProjection("v2 agent roles must be unique")
+		}
+		if agent.AgentID != "" {
+			if !domain.ValidProjectAgentID(agent.AgentID) {
+				return invalidProjection("v2 agentId must be a canonical UUID")
+			}
+			if _, duplicate := agentIDs[agent.AgentID]; duplicate {
+				return invalidProjection("v2 agent IDs must be unique")
+			}
+			agentIDs[agent.AgentID] = struct{}{}
+		}
+		agents[agent.AgentKey] = agent
+		roles[agent.Role] = struct{}{}
+	}
+
+	sessionIDs := make(map[domain.SessionID]struct{})
+	agentAttempts := make(map[string]struct{})
+	for _, task := range projection.Tasks {
+		if task.AgentKey == "" {
+			if task.Capability != "either" ||
+				task.AssignedRole != "" ||
+				task.AssignedAgent != "" ||
+				task.AgentID != "" ||
+				task.Attempts != 0 ||
+				task.SessionID != "" ||
+				len(task.SessionAttempts) != 0 {
+				return invalidProjection("only undispatched either tasks may be unassigned in v2")
+			}
+			if err := validateV2AtomspaceLinks(task, agents, true); err != nil {
+				return err
+			}
+			continue
+		}
+		agent, ok := agents[task.AgentKey]
+		if !ok {
+			return invalidProjection("v2 task agentKey must reference a declared agent")
+		}
+		if task.AssignedRole == "" || task.AssignedRole != agent.Role {
+			return invalidProjection("v2 task assignedRole must match its declared agent")
+		}
+		if task.AssignedAgent != string(task.AgentKey) {
+			return invalidProjection("v2 task assignedAgent must equal agentKey")
+		}
+		if task.AgentID != agent.AgentID {
+			return invalidProjection("v2 task agentId must match its declared agent")
+		}
+		if task.Attempts != len(task.SessionAttempts) {
+			return invalidProjection("v2 task attempts must match sessionAttempts")
+		}
+		if err := validateV2TaskAttempts(
+			task,
+			sessionIDs,
+			agentAttempts,
+			agentIDs,
+		); err != nil {
+			return err
+		}
+		if err := validateV2AtomspaceLinks(task, agents, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateV2TaskAttempts(
+	task Task,
+	sessionIDs map[domain.SessionID]struct{},
+	agentAttempts map[string]struct{},
+	declaredAgentIDs map[domain.ProjectAgentID]struct{},
+) error {
+	goalAttempts := make(map[int]struct{}, len(task.SessionAttempts))
+	var latest SessionAttempt
+	for _, attempt := range task.SessionAttempts {
+		if attempt.Attempt <= 0 || attempt.AgentAttempt <= 0 {
+			return invalidProjection("v2 Goal and AO attempt numbers must be positive")
+		}
+		if !domain.ValidProjectAgentID(attempt.AgentID) {
+			return invalidProjection("v2 session attempt agentId must be a canonical UUID")
+		}
+		if _, declared := declaredAgentIDs[attempt.AgentID]; !declared {
+			return invalidProjection("v2 session attempt agentId must reference a declared bound agent")
+		}
+		if !safeID.MatchString(string(attempt.SessionID)) {
+			return invalidProjection("v2 session attempt sessionId must be a safe identifier")
+		}
+		if _, ok := v2SessionStatuses[attempt.Status]; !ok {
+			return invalidProjection("v2 session attempt status is invalid")
+		}
+		if _, ok := v2ActivityStates[attempt.Activity]; !ok {
+			return invalidProjection("v2 session attempt activity is invalid")
+		}
+		if _, duplicate := goalAttempts[attempt.Attempt]; duplicate {
+			return invalidProjection("v2 Goal attempt numbers must be unique per task")
+		}
+		if _, duplicate := sessionIDs[attempt.SessionID]; duplicate {
+			return invalidProjection("v2 session IDs must be unique")
+		}
+		agentAttemptKey := string(attempt.AgentID) + "\x00" +
+			strconv.FormatInt(attempt.AgentAttempt, 10)
+		if _, duplicate := agentAttempts[agentAttemptKey]; duplicate {
+			return invalidProjection("v2 AO attempt numbers must be unique per agent")
+		}
+		goalAttempts[attempt.Attempt] = struct{}{}
+		sessionIDs[attempt.SessionID] = struct{}{}
+		agentAttempts[agentAttemptKey] = struct{}{}
+		if latest.SessionID == "" || attempt.Attempt > latest.Attempt {
+			latest = attempt
+		}
+	}
+	if len(task.SessionAttempts) == 0 {
+		if task.SessionID != "" {
+			return invalidProjection("v2 tasks without attempts cannot name a session")
+		}
+		return nil
+	}
+	for expected := 1; expected <= len(task.SessionAttempts); expected++ {
+		if _, present := goalAttempts[expected]; !present {
+			return invalidProjection("v2 Goal attempts must be contiguous from 1")
+		}
+	}
+	if task.SessionID != latest.SessionID {
+		return invalidProjection("v2 task sessionId must name its latest Goal attempt")
+	}
+	if task.AgentID == "" || task.AgentID != latest.AgentID {
+		return invalidProjection("v2 task agentId must match its latest Goal attempt")
+	}
+	return nil
+}
+
+func validateV2AtomspaceLinks(
+	task Task,
+	agents map[domain.ProjectAgentKey]Agent,
+	unassigned bool,
+) error {
+	if len(task.AtomspaceLinks) == 0 {
+		return invalidProjection("v2 tasks require logical Atomspace links")
+	}
+	linkKeys := make(map[string]struct{}, len(task.AtomspaceLinks))
+	hasShared := false
+	hasCurrentPrivate := false
+	for _, link := range task.AtomspaceLinks {
+		if !safeID.MatchString(link.LinkKey) {
+			return invalidProjection("v2 Atomspace link keys must be safe identifiers")
+		}
+		if _, duplicate := linkKeys[link.LinkKey]; duplicate {
+			return invalidProjection("v2 Atomspace link keys must be unique per task")
+		}
+		linkKeys[link.LinkKey] = struct{}{}
+		switch link.Scope {
+		case "shared":
+			if link.Owner != "project" {
+				return invalidProjection("v2 shared Atomspace links must be owned by project")
+			}
+			hasShared = true
+		case "private":
+			if unassigned {
+				return invalidProjection("v2 unassigned tasks cannot contain private Atomspace links")
+			}
+			if _, ok := agents[domain.ProjectAgentKey(link.Owner)]; !ok {
+				return invalidProjection("v2 private Atomspace links must reference a declared agent")
+			}
+			if link.Owner == string(task.AgentKey) {
+				hasCurrentPrivate = true
+			}
+		default:
+			return invalidProjection("v2 Atomspace link scope must be shared or private")
+		}
+	}
+	if !hasShared {
+		return invalidProjection("v2 tasks require a shared project Atomspace link")
+	}
+	if !unassigned && !hasCurrentPrivate {
+		return invalidProjection("v2 assigned tasks require a private link for the current agent")
 	}
 	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentnotes"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -42,13 +43,18 @@ func TestSpawnPreparesOhMyGoalsMCPProfile(t *testing.T) {
 		Lifecycle: &fakeLCM{store: store},
 		DataDir:   dataDir,
 		LookPath:  func(string) (string, error) { return "/bin/true", nil },
+		NewProjectAgentID: func() string {
+			return firstProjectAgentID
+		},
 	})
 
 	record, _, _, err := manager.Spawn(t.Context(), ports.SpawnConfig{
-		ProjectID:  "research",
-		Kind:       domain.KindWorker,
-		MCPProfile: domain.MCPProfileOhMyGoals,
-		Prompt:     "investigate the claim",
+		ProjectID:        "research",
+		Kind:             domain.KindWorker,
+		MCPProfile:       domain.MCPProfileOhMyGoals,
+		ProjectAgentKey:  "evidence-worker",
+		ProjectAgentRole: "researcher",
+		Prompt:           "investigate the claim",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -89,10 +95,57 @@ func TestSpawnPreparesOhMyGoalsMCPProfile(t *testing.T) {
 	if env[ohMyGoalsSessionEnv] != string(record.ID) {
 		t.Fatalf("session identity = %q", env[ohMyGoalsSessionEnv])
 	}
+	if env[ohMyGoalsAgentIDEnv] != firstProjectAgentID ||
+		env[ohMyGoalsAttemptEnv] != "1" {
+		t.Fatalf("Oh My Goals stable identity = %q attempt = %q", env[ohMyGoalsAgentIDEnv], env[ohMyGoalsAttemptEnv])
+	}
+	if env[EnvProjectAgentID] != firstProjectAgentID ||
+		env[EnvProjectAgentRole] != "researcher" ||
+		env[EnvProjectAgentAttempt] != "1" {
+		t.Fatalf("AO stable project-agent environment = %#v", env)
+	}
+	wantPrivate := filepath.Join(
+		dataDir,
+		filepath.FromSlash(agentnotes.AgentRelativePath("research", firstProjectAgentID)),
+	)
+	wantShared := filepath.Join(
+		dataDir,
+		filepath.FromSlash(agentnotes.ProjectRelativePath("research")),
+	)
+	if env[ohMyGoalsAtomspacePathEnv] != wantPrivate ||
+		env[ohMyGoalsProjectAtomspacePathEnv] != wantShared {
+		t.Fatalf(
+			"Atomspace paths = private:%q shared:%q",
+			env[ohMyGoalsAtomspacePathEnv],
+			env[ohMyGoalsProjectAtomspacePathEnv],
+		)
+	}
+	for _, path := range []string{wantPrivate, wantShared} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("Atomspace %q: %v", path, err)
+		}
+	}
 	wantDBRoot := filepath.Join(dataDir, "mcp", "oh-my-goals", "projects")
 	if got := env[ohMyGoalsMemoryDBEnv]; !strings.HasPrefix(got, wantDBRoot) ||
 		filepath.Base(got) != "memory.db" {
 		t.Fatalf("memory database = %q, want under %q", got, wantDBRoot)
+	}
+
+	terminal := store.sessions[record.ID]
+	terminal.IsTerminated = true
+	terminal.Activity = domain.Activity{State: domain.ActivityExited}
+	terminal.Metadata.AgentSessionID = "native-agent-1"
+	store.sessions[record.ID] = terminal
+	if _, err := manager.RestoreWithMode(t.Context(), record.ID); err != nil {
+		t.Fatalf("restore linked Oh My Goals session: %v", err)
+	}
+	restoredEnv := runtimeController.lastCfg.Env
+	if restoredEnv[ohMyGoalsSessionEnv] != string(record.ID) ||
+		restoredEnv[ohMyGoalsAgentIDEnv] != firstProjectAgentID ||
+		restoredEnv[ohMyGoalsAttemptEnv] != "1" ||
+		restoredEnv[ohMyGoalsAtomspacePathEnv] != wantPrivate ||
+		restoredEnv[ohMyGoalsProjectAtomspacePathEnv] != wantShared {
+		t.Fatalf("restored Oh My Goals environment = %#v", restoredEnv)
 	}
 }
 

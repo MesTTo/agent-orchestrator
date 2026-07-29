@@ -177,8 +177,10 @@ ao start
 ## Documentation
 
 This fork adds a read-only [GoalChainer board](docs/goalchainer.md) backed by a
-MeTTaScript Atomspace. It displays scheduled work and links released tasks to
-the existing Agent Orchestrator terminal view. PostHog transmission is
+MeTTaScript Atomspace. The v2 board displays stable project-agent identities,
+logical MeTTa Atomspace access, separate Goal and AO attempt numbers, and every
+linked session. A project-agent panel shows the same immutable attempt history
+and a bounded view of each agent's private MeTTa notes. PostHog transmission is
 disabled.
 
 | Document                                                         | Start here when you need                                                                     |

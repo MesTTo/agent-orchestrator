@@ -17,12 +17,16 @@ import (
 )
 
 const (
-	ohMyGoalsCLIEnv        = "OH_MY_GOALS_CLI"
-	ohMyGoalsMemoryDBEnv   = "OH_MY_GOALS_MEMORY_DB"
-	ohMyGoalsRepositoryEnv = "OH_MY_GOALS_REPOSITORY"
-	ohMyGoalsSessionEnv    = "OH_MY_GOALS_SESSION"
-	mcpProfileSetupTimeout = 30 * time.Second
-	maxMCPSetupOutputBytes = 16 * 1024
+	ohMyGoalsCLIEnv                  = "OH_MY_GOALS_CLI"
+	ohMyGoalsMemoryDBEnv             = "OH_MY_GOALS_MEMORY_DB"
+	ohMyGoalsRepositoryEnv           = "OH_MY_GOALS_REPOSITORY"
+	ohMyGoalsSessionEnv              = "OH_MY_GOALS_SESSION"
+	ohMyGoalsAgentIDEnv              = "OH_MY_GOALS_AGENT_ID"
+	ohMyGoalsAttemptEnv              = "OH_MY_GOALS_ATTEMPT"
+	ohMyGoalsAtomspacePathEnv        = "OH_MY_GOALS_ATOMSPACE_PATH"
+	ohMyGoalsProjectAtomspacePathEnv = "OH_MY_GOALS_PROJECT_ATOMSPACE_PATH"
+	mcpProfileSetupTimeout           = 30 * time.Second
+	maxMCPSetupOutputBytes           = 16 * 1024
 )
 
 type mcpProfileRuntime struct {

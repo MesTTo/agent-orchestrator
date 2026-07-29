@@ -150,6 +150,24 @@ type Project struct {
 	Kind          string
 }
 
+type ProjectAgent struct {
+	ID                domain.ProjectAgentID
+	ProjectID         domain.ProjectID
+	ProjectAgentKey   domain.ProjectAgentKey
+	Role              domain.ProjectAgentRole
+	NotesRelativePath string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type ProjectAgentSessionAttempt struct {
+	ProjectID      domain.ProjectID
+	ProjectAgentID domain.ProjectAgentID
+	AttemptNumber  int64
+	SessionID      domain.SessionID
+	CreatedAt      time.Time
+}
+
 type Review struct {
 	ID               string
 	SessionID        domain.SessionID

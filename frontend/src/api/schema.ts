@@ -315,6 +315,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List stable agents and immutable attempts for one project */
+        get: operations["listProjectAgents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/agents/{agentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fetch one AO-generated stable project agent */
+        get: operations["getProjectAgent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/agents/{agentId}/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one validated bounded private MeTTa snapshot */
+        get: operations["getProjectAgentNotes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/config": {
         parameters: {
             query?: never;
@@ -887,6 +938,9 @@ export interface components {
             /** Format: int64 */
             previewRevision?: number;
             previewUrl?: string;
+            /** Format: int64 */
+            projectAgentAttempt?: number;
+            projectAgentId?: string;
             projectId: string;
             prs: components["schemas"]["SessionPRFacts"][];
             /** @enum {string} */
@@ -941,6 +995,17 @@ export interface components {
         DomainReviewerConfig: {
             harness: string;
         };
+        GoalChainerAgent: {
+            agentId?: string;
+            agentKey: string;
+            role: string;
+        };
+        GoalChainerAtomspaceLink: {
+            linkKey: string;
+            owner: string;
+            /** @enum {string} */
+            scope: "shared" | "private";
+        };
         GoalChainerAudit: {
             events: number;
             head?: string;
@@ -950,12 +1015,13 @@ export interface components {
             ok: boolean;
         };
         GoalChainerProjection: {
+            agents?: components["schemas"]["GoalChainerAgent"][];
             audit: components["schemas"]["GoalChainerAudit"];
             owner: string;
             planDigest: string;
             projectId?: string;
             /** @enum {string} */
-            protocol: "goalchainer-ui-v1";
+            protocol: "goalchainer-ui-v1" | "goalchainer-ui-v2";
             semanticDigest: string;
             sourceRevision: string;
             summary: components["schemas"]["GoalChainerSummary"];
@@ -965,6 +1031,18 @@ export interface components {
             /** Format: date-time */
             updatedAt?: string;
             usageTokens: number;
+        };
+        GoalChainerSessionAttempt: {
+            /** @enum {string} */
+            activity: "active" | "idle" | "waiting_input" | "blocked" | "exited";
+            /** Format: int64 */
+            agentAttempt: number;
+            agentId: string;
+            attempt: number;
+            isTerminated: boolean;
+            sessionId: string;
+            /** @enum {string} */
+            status: "working" | "pr_open" | "draft" | "ci_failed" | "review_pending" | "changes_requested" | "approved" | "mergeable" | "merged" | "needs_input" | "exited" | "idle" | "terminated" | "no_signal";
         };
         GoalChainerSummary: {
             backlog: number;
@@ -978,7 +1056,11 @@ export interface components {
         };
         GoalChainerTask: {
             acceptance: string;
+            agentId?: string;
+            agentKey?: string;
             assignedAgent?: string;
+            assignedRole?: string;
+            atomspaceLinks?: components["schemas"]["GoalChainerAtomspaceLink"][];
             attempts: number;
             /** @enum {string} */
             capability: "local" | "specialist" | "either";
@@ -987,6 +1069,7 @@ export interface components {
             releaseReason?: string;
             /** Format: date-time */
             scheduledAt?: null | string;
+            sessionAttempts?: components["schemas"]["GoalChainerSessionAttempt"][];
             sessionId?: string;
             /** @enum {string} */
             stakes: "normal" | "high";
@@ -1030,6 +1113,9 @@ export interface components {
             nextCursor?: string;
             notifications: components["schemas"]["NotificationResponse"][];
             unreadCount: number;
+        };
+        ListProjectAgentsResponse: {
+            agents: components["schemas"]["ProjectAgent"][];
         };
         ListProjectsResponse: {
             projects: components["schemas"]["ProjectSummary"][];
@@ -1142,6 +1228,50 @@ export interface components {
             path: string;
             repo: string;
             workspaceRepos?: components["schemas"]["WorkspaceRepo"][];
+        };
+        ProjectAgent: {
+            attempts: components["schemas"]["ProjectAgentAttempt"][];
+            /** Format: date-time */
+            createdAt: string;
+            id: string;
+            notes: components["schemas"]["ProjectAgentNotesMetadata"];
+            projectAgentKey: string;
+            projectId: string;
+            role: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        ProjectAgentAttempt: {
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: int64 */
+            number: number;
+            sessionId: string;
+        };
+        ProjectAgentNotes: {
+            agentId: string;
+            content: string;
+            initialized: boolean;
+            /** Format: date-time */
+            modifiedAt: string;
+            propositionCount: number;
+            /** Format: int64 */
+            sizeBytes: number;
+            truncated: boolean;
+        };
+        ProjectAgentNotesMetadata: {
+            exists: boolean;
+            initialized: boolean;
+            /** Format: date-time */
+            modifiedAt?: string;
+            /** Format: int64 */
+            sizeBytes: number;
+        };
+        ProjectAgentNotesResponse: {
+            notes: components["schemas"]["ProjectAgentNotes"];
+        };
+        ProjectAgentResponse: {
+            agent: components["schemas"]["ProjectAgent"];
         };
         ProjectConfig: {
             agentConfig?: components["schemas"]["AgentConfig"];
@@ -1448,6 +1578,8 @@ export interface components {
             kind?: "worker" | "orchestrator";
             /** @enum {string} */
             mcpProfile?: "oh-my-goals";
+            projectAgentKey?: string;
+            projectAgentRole?: string;
             projectId: string;
             prompt?: string;
             sourceTaskId?: string;
@@ -2551,6 +2683,196 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listProjectAgents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (registry key). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListProjectAgentsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getProjectAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (registry key). */
+                id: string;
+                /** @description AO-generated stable project-agent UUID. */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectAgentResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getProjectAgentNotes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (registry key). */
+                id: string;
+                /** @description AO-generated stable project-agent UUID. */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectAgentNotesResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

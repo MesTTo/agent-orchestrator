@@ -26,27 +26,29 @@ import (
 )
 
 type fakeSessionService struct {
-	sessions        map[domain.SessionID]domain.Session
-	sourceSessions  map[string]domain.Session
-	sent            string
-	cleanupProjects []domain.ProjectID
-	cleanupResult   []domain.SessionID
-	cleanupSkipped  []sessionsvc.CleanupSkipped
-	workspaceFiles  sessionsvc.WorkspaceFiles
-	workspaceFile   sessionsvc.WorkspaceFileDetail
-	lastSpawn       ports.SpawnConfig
-	spawnErr        error
-	claimErr        error
-	listPRErr       error
-	workspaceErr    error
+	sessions             map[domain.SessionID]domain.Session
+	sourceSessions       map[string]domain.Session
+	sent                 string
+	cleanupProjects      []domain.ProjectID
+	cleanupResult        []domain.SessionID
+	cleanupSkipped       []sessionsvc.CleanupSkipped
+	workspaceFiles       sessionsvc.WorkspaceFiles
+	workspaceFile        sessionsvc.WorkspaceFileDetail
+	lastSpawn            ports.SpawnConfig
+	spawnErr             error
+	claimErr             error
+	listPRErr            error
+	workspaceErr         error
+	projectAgentAttempts map[string]int64
 }
 
 func newFakeSessionService() *fakeSessionService {
 	now := time.Now().UTC()
 	s := domain.Session{SessionRecord: domain.SessionRecord{ID: "ao-1", ProjectID: "ao", Kind: domain.KindWorker, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}, CreatedAt: now, UpdatedAt: now}, Status: domain.StatusIdle, TerminalHandleID: "ao-1/terminal_0"}
 	return &fakeSessionService{
-		sessions:       map[domain.SessionID]domain.Session{s.ID: s},
-		sourceSessions: make(map[string]domain.Session),
+		sessions:             map[domain.SessionID]domain.Session{s.ID: s},
+		sourceSessions:       make(map[string]domain.Session),
+		projectAgentAttempts: make(map[string]int64),
 	}
 }
 
@@ -74,6 +76,12 @@ func (f *fakeSessionService) Spawn(_ context.Context, cfg ports.SpawnConfig) (do
 	}
 	now := time.Now().UTC()
 	s := domain.Session{SessionRecord: domain.SessionRecord{ID: domain.SessionID(string(cfg.ProjectID) + "-2"), ProjectID: cfg.ProjectID, IssueID: cfg.IssueID, Kind: cfg.Kind, Harness: cfg.Harness, DisplayName: cfg.DisplayName, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}, CreatedAt: now, UpdatedAt: now}, Status: domain.StatusIdle}
+	if cfg.ProjectAgentKey != "" {
+		key := string(cfg.ProjectID) + "\x00" + string(cfg.ProjectAgentKey)
+		f.projectAgentAttempts[key]++
+		s.ProjectAgentID = "7e66da4a-2b4f-4e87-865f-14f554070faa"
+		s.ProjectAgentAttempt = f.projectAgentAttempts[key]
+	}
 	f.sessions[s.ID] = s
 	return s, len(cfg.Prompt), 0, nil
 }
@@ -107,6 +115,116 @@ func TestSessionsAPISpawnAcceptsOnlyTypedMCPProfiles(t *testing.T) {
 		!strings.Contains(string(body), "MCP_PROFILE_INVALID") {
 		t.Fatalf("untyped MCP profile spawn = %d; body=%s", status, body)
 	}
+}
+
+func TestSessionsAPISpawnRequiresAValidatedProjectAgentPair(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		code string
+	}{
+		{
+			name: "key only",
+			body: `{"projectId":"ao","harness":"codex","projectAgentKey":"evidence-worker"}`,
+			code: "PROJECT_AGENT_FIELDS_INCOMPLETE",
+		},
+		{
+			name: "role only",
+			body: `{"projectId":"ao","harness":"codex","projectAgentRole":"researcher"}`,
+			code: "PROJECT_AGENT_FIELDS_INCOMPLETE",
+		},
+		{
+			name: "invalid key",
+			body: `{"projectId":"ao","harness":"codex","projectAgentKey":"caller/path","projectAgentRole":"researcher"}`,
+			code: "PROJECT_AGENT_KEY_INVALID",
+		},
+		{
+			name: "invalid role",
+			body: `{"projectId":"ao","harness":"codex","projectAgentKey":"evidence-worker","projectAgentRole":"role/path"}`,
+			code: "PROJECT_AGENT_ROLE_INVALID",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newSessionTestServer(t, newFakeSessionService())
+			body, status, _ := doRequest(
+				t,
+				server,
+				http.MethodPost,
+				"/api/v1/sessions",
+				test.body,
+			)
+			assertErrorCode(t, body, status, http.StatusBadRequest, test.code)
+		})
+	}
+}
+
+func TestSessionsAPISpawnReturnsGeneratedProjectAgentAttemptsAcrossTasks(t *testing.T) {
+	svc := newFakeSessionService()
+	server := newSessionTestServer(t, svc)
+	spawn := func(sourceTaskID string) struct {
+		Session struct {
+			ProjectAgentID      domain.ProjectAgentID `json:"projectAgentId"`
+			ProjectAgentAttempt int64                 `json:"projectAgentAttempt"`
+		} `json:"session"`
+		Created bool `json:"created"`
+	} {
+		t.Helper()
+		body, status, _ := doRequest(
+			t,
+			server,
+			http.MethodPost,
+			"/api/v1/sessions",
+			`{"projectId":"ao","harness":"codex","sourceTaskId":"`+sourceTaskID+
+				`","projectAgentKey":"evidence-worker","projectAgentRole":"researcher"}`,
+		)
+		if status != http.StatusCreated {
+			t.Fatalf("spawn %s = %d, body=%s", sourceTaskID, status, body)
+		}
+		var response struct {
+			Session struct {
+				ProjectAgentID      domain.ProjectAgentID `json:"projectAgentId"`
+				ProjectAgentAttempt int64                 `json:"projectAgentAttempt"`
+			} `json:"session"`
+			Created bool `json:"created"`
+		}
+		mustJSON(t, body, &response)
+		return response
+	}
+
+	first := spawn("goalchainer:thread:task:collect")
+	second := spawn("goalchainer:thread:task:review")
+	if !first.Created || !second.Created {
+		t.Fatalf("created flags = %v, %v", first.Created, second.Created)
+	}
+	if first.Session.ProjectAgentID != "7e66da4a-2b4f-4e87-865f-14f554070faa" ||
+		second.Session.ProjectAgentID != first.Session.ProjectAgentID {
+		t.Fatalf("stable identities = %q, %q", first.Session.ProjectAgentID, second.Session.ProjectAgentID)
+	}
+	if first.Session.ProjectAgentAttempt != 1 ||
+		second.Session.ProjectAgentAttempt != 2 {
+		t.Fatalf(
+			"AO attempt numbers = %d, %d",
+			first.Session.ProjectAgentAttempt,
+			second.Session.ProjectAgentAttempt,
+		)
+	}
+	if svc.lastSpawn.ProjectAgentKey != "evidence-worker" ||
+		svc.lastSpawn.ProjectAgentRole != "researcher" {
+		t.Fatalf("spawn project-agent pair = %q/%q", svc.lastSpawn.ProjectAgentKey, svc.lastSpawn.ProjectAgentRole)
+	}
+}
+
+func TestSessionsAPISpawnNeverAcceptsCallerGeneratedAgentID(t *testing.T) {
+	server := newSessionTestServer(t, newFakeSessionService())
+	body, status, _ := doRequest(
+		t,
+		server,
+		http.MethodPost,
+		"/api/v1/sessions",
+		`{"projectId":"ao","harness":"codex","projectAgentId":"7e66da4a-2b4f-4e87-865f-14f554070faa"}`,
+	)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_JSON")
 }
 
 func (f *fakeSessionService) SpawnFromExternalSource(

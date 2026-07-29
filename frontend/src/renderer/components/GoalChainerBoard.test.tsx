@@ -87,6 +87,59 @@ function projection(): GoalChainerProjection {
   };
 }
 
+function v2Projection(): GoalChainerProjection {
+  const value = projection();
+  value.protocol = "goalchainer-ui-v2";
+  value.projectId = "goalchainer";
+  value.agents = [
+    {
+      agentKey: "local-worker",
+      role: "worker",
+      agentId: "7e66da4a-2b4f-4e87-865f-14f554070faa",
+    },
+    {
+      agentKey: "old-worker",
+      role: "reviewer",
+      agentId: "272a4c63-64b9-47a0-9624-7fc0fff46aa1",
+    },
+  ];
+  const task = value.tasks[2];
+  task.assignedAgent = "local-worker";
+  task.assignedRole = "worker";
+  task.agentKey = "local-worker";
+  task.agentId = "7e66da4a-2b4f-4e87-865f-14f554070faa";
+  task.attempts = 2;
+  task.sessionAttempts = [
+    {
+      attempt: 1,
+      agentId: "272a4c63-64b9-47a0-9624-7fc0fff46aa1",
+      agentAttempt: 1,
+      sessionId: "goalchainer-3",
+      status: "terminated",
+      activity: "exited",
+      isTerminated: true,
+    },
+    {
+      attempt: 2,
+      agentId: "7e66da4a-2b4f-4e87-865f-14f554070faa",
+      agentAttempt: 4,
+      sessionId: "goalchainer-7",
+      status: "working",
+      activity: "active",
+      isTerminated: false,
+    },
+  ];
+  task.atomspaceLinks = [
+    { linkKey: "project-shared", scope: "shared", owner: "project" },
+    {
+      linkKey: "worker-private",
+      scope: "private",
+      owner: "local-worker",
+    },
+  ];
+  return value;
+}
+
 beforeEach(() => navigateMock.mockReset());
 
 it("renders MeTTa task states as a read-only six-lane board", () => {
@@ -113,6 +166,10 @@ it("renders MeTTa task states as a read-only six-lane board", () => {
   expect(
     screen.queryByRole("button", { name: /complete|block|claim/i }),
   ).not.toBeInTheDocument();
+  const legacyCard = screen.getByTestId("goal-task-collect-evidence");
+  expect(legacyCard).toHaveTextContent("coder");
+  expect(legacyCard).not.toHaveTextContent("Role");
+  expect(legacyCard).not.toHaveTextContent("Goal attempts");
 });
 
 it("orders scheduled cards by release time and opens linked AO sessions", () => {
@@ -123,11 +180,13 @@ it("orders scheduled cards by release time and opens linked AO sessions", () => 
   const scheduled = screen.getByRole("heading", { name: "Scheduled" })
     .parentElement?.parentElement;
   if (!scheduled) throw new Error("missing Scheduled lane");
-  const cards = within(scheduled).getAllByRole("button");
+  const cards = within(scheduled).getAllByTestId(/goal-task-/);
   expect(cards[0]).toHaveTextContent("earlier-high");
   expect(cards[1]).toHaveTextContent("later-normal");
 
-  fireEvent.click(screen.getByRole("button", { name: /^collect-evidence/i }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Open collect-evidence session" }),
+  );
   expect(navigateMock).toHaveBeenCalledWith({
     to: "/projects/$projectId/sessions/$sessionId",
     params: { projectId: "goalchainer", sessionId: "goalchainer-7" },
@@ -152,6 +211,57 @@ it("shows empty lanes without creating lifecycle controls", () => {
 
   expect(screen.getAllByText("No tasks")).toHaveLength(6);
   expect(screen.queryByRole("button")).not.toBeInTheDocument();
+});
+
+it("renders v2 stable identity, separate attempts, links, and every session", () => {
+  render(
+    <GoalChainerBoard projectId="goalchainer" projection={v2Projection()} />,
+  );
+
+  const card = screen.getByTestId("goal-task-collect-evidence");
+  expect(card).toHaveTextContent("Role worker");
+  expect(card).toHaveTextContent("Agent local-worker");
+  expect(card).toHaveTextContent(
+    "7e66da4a-2b4f-4e87-865f-14f554070faa",
+  );
+  expect(card).toHaveTextContent("Goal attempts 2 · AO history 2");
+  expect(card).toHaveTextContent("Goal 2 · AO 4 · working");
+  expect(card).toHaveTextContent("Goal 1 · AO 1 · terminated");
+  expect(card).toHaveTextContent("project-shared · shared · project");
+  expect(card).toHaveTextContent(
+    "worker-private · private · local-worker",
+  );
+  expect(
+    screen.getByRole("link", { name: "View stable agent local-worker" }),
+  ).toHaveAttribute(
+    "href",
+    "#project-agent-7e66da4a-2b4f-4e87-865f-14f554070faa",
+  );
+
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Open collect-evidence Goal attempt 1 session",
+    }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Open collect-evidence Goal attempt 2 session",
+    }),
+  );
+  expect(navigateMock.mock.calls).toEqual([
+    [
+      {
+        to: "/projects/$projectId/sessions/$sessionId",
+        params: { projectId: "goalchainer", sessionId: "goalchainer-3" },
+      },
+    ],
+    [
+      {
+        to: "/projects/$projectId/sessions/$sessionId",
+        params: { projectId: "goalchainer", sessionId: "goalchainer-7" },
+      },
+    ],
+  ]);
 });
 
 it("marks a projection stale from AO's persisted update time", () => {

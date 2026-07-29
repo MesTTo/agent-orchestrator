@@ -58,13 +58,17 @@ type SessionMetadata struct {
 // facts: identity, agent harness, activity_state, is_terminated, and operational
 // metadata. The user-facing Status is derived from these facts plus PR facts.
 type SessionRecord struct {
-	ID          SessionID    `json:"id"`
-	ProjectID   ProjectID    `json:"projectId"`
-	IssueID     IssueID      `json:"issueId,omitempty"`
-	Kind        SessionKind  `json:"kind"`
-	Harness     AgentHarness `json:"harness,omitempty"`
-	DisplayName string       `json:"displayName,omitempty"`
-	Activity    Activity     `json:"activity"`
+	ID        SessionID `json:"id"`
+	ProjectID ProjectID `json:"projectId"`
+	// ProjectAgentID and ProjectAgentAttempt come from the immutable attempt
+	// relation rather than mutable session columns.
+	ProjectAgentID      ProjectAgentID `json:"projectAgentId,omitempty" pattern:"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"`
+	ProjectAgentAttempt int64          `json:"projectAgentAttempt,omitempty"`
+	IssueID             IssueID        `json:"issueId,omitempty"`
+	Kind                SessionKind    `json:"kind"`
+	Harness             AgentHarness   `json:"harness,omitempty"`
+	DisplayName         string         `json:"displayName,omitempty"`
+	Activity            Activity       `json:"activity"`
 	// FirstSignalAt is when the FIRST agent hook callback arrived for the
 	// current spawn/restore: raw signal receipt, independent of the derived
 	// activity state. Zero means no hook has ever reported, which deriveStatus

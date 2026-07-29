@@ -10,6 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	projectagentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/projectagent"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 )
 
@@ -28,6 +29,11 @@ type ProjectIDParam struct {
 	ID string `path:"id" description:"Project identifier (registry key)."`
 }
 
+// ProjectAgentIDParam is the AO-generated stable UUID beneath one project.
+type ProjectAgentIDParam struct {
+	AgentID string `path:"agentId" pattern:"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" description:"AO-generated stable project-agent UUID."`
+}
+
 // AgentIDParam is the {agent} path parameter for one-agent catalog probes.
 type AgentIDParam struct {
 	Agent string `path:"agent" description:"Agent adapter identifier."`
@@ -41,6 +47,21 @@ type ListProjectsResponse struct {
 // ProjectResponse is the { project } body shared by POST /projects (201).
 type ProjectResponse struct {
 	Project projectsvc.Project `json:"project"`
+}
+
+// ListProjectAgentsResponse is the body of GET /projects/{id}/agents.
+type ListProjectAgentsResponse struct {
+	Agents []projectagentsvc.Agent `json:"agents"`
+}
+
+// ProjectAgentResponse is the body of GET /projects/{id}/agents/{agentId}.
+type ProjectAgentResponse struct {
+	Agent projectagentsvc.Agent `json:"agent"`
+}
+
+// ProjectAgentNotesResponse is the body of the bounded private notes read.
+type ProjectAgentNotesResponse struct {
+	Notes projectagentsvc.Notes `json:"notes"`
 }
 
 // GetProjectResponse is the { status, project } body of GET /projects/{id},
@@ -152,14 +173,16 @@ type ListSessionsResponse struct {
 
 // SpawnSessionRequest is the body of POST /api/v1/sessions.
 type SpawnSessionRequest struct {
-	ProjectID    domain.ProjectID    `json:"projectId"`
-	IssueID      domain.IssueID      `json:"issueId,omitempty"`
-	SourceTaskID string              `json:"sourceTaskId,omitempty" maxLength:"128"`
-	MCPProfile   domain.MCPProfile   `json:"mcpProfile,omitempty" enum:"oh-my-goals"`
-	Kind         domain.SessionKind  `json:"kind,omitempty" enum:"worker,orchestrator"`
-	Harness      domain.AgentHarness `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,copilot,goose,auggie,continue,devin,cline,kimi,kiro,kilocode,vibe,pi,autohand,fake"`
-	Branch       string              `json:"branch,omitempty"`
-	Prompt       string              `json:"prompt,omitempty" maxLength:"4096"`
+	ProjectID        domain.ProjectID        `json:"projectId"`
+	IssueID          domain.IssueID          `json:"issueId,omitempty"`
+	ProjectAgentKey  domain.ProjectAgentKey  `json:"projectAgentKey,omitempty" maxLength:"128"`
+	ProjectAgentRole domain.ProjectAgentRole `json:"projectAgentRole,omitempty" maxLength:"128"`
+	SourceTaskID     string                  `json:"sourceTaskId,omitempty" maxLength:"128"`
+	MCPProfile       domain.MCPProfile       `json:"mcpProfile,omitempty" enum:"oh-my-goals"`
+	Kind             domain.SessionKind      `json:"kind,omitempty" enum:"worker,orchestrator"`
+	Harness          domain.AgentHarness     `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,grok,droid,amp,agy,crush,cursor,qwen,copilot,goose,auggie,continue,devin,cline,kimi,kiro,kilocode,vibe,pi,autohand,fake"`
+	Branch           string                  `json:"branch,omitempty"`
+	Prompt           string                  `json:"prompt,omitempty" maxLength:"4096"`
 	// DisplayName is the sidebar label for the session, capped at 20 characters.
 	// `ao spawn --name` always sets it; other clients (e.g. the desktop new-task
 	// dialog) may omit it and fall back to the session id in the read model.

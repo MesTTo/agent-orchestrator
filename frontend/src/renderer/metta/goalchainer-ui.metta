@@ -24,6 +24,16 @@
       (gc-agent-record $agent $record))
     $record))
 
+;; Select every declared project-agent record.
+(@doc gc-ui-agent
+  (@desc "Returns grounded project-agent records, including agents without a task or stable UUID")
+  (@return "One grounded project-agent record per declaration"))
+(: gc-ui-agent (-> Atom))
+(= (gc-ui-agent)
+  (match &self
+    (gc-agent-record $agent $record)
+    $record))
+
 ;; Open the Agent Orchestrator session linked to a task.
 (@doc gc-ui-open-session
   (@desc "Invokes the website session navigator for a linked GoalChainer task")
@@ -34,4 +44,17 @@
 (= (gc-ui-open-session $task)
   (match &self
     (gc-task-session $task $session)
+    (ao-open-session $session)))
+
+;; Open one immutable AO session attempt linked to a GoalChainer task.
+(@doc gc-ui-open-session-attempt
+  (@desc "Invokes the session navigator for one Goal and AO attempt record")
+  (@params
+    (@param "The GoalChainer task identity")
+    (@param "The Goal task attempt number"))
+  (@return "True when the requested Agent Orchestrator session was opened"))
+(: gc-ui-open-session-attempt (-> Atom Number Bool))
+(= (gc-ui-open-session-attempt $task $attempt)
+  (match &self
+    (gc-task-session-attempt $task $attempt $agent-attempt $session)
     (ao-open-session $session)))

@@ -96,10 +96,14 @@ export function GoalChainerBoard({
                     <GoalTaskCard
                       key={task.id}
                       task={task}
-                      onOpenSession={
+                      v2={projection.protocol === "goalchainer-ui-v2"}
+                      onOpenLatestSession={
                         task.sessionId
                           ? () => agentSpace.openTaskSession(task.id)
                           : undefined
+                      }
+                      onOpenAttemptSession={(attempt) =>
+                        agentSpace.openTaskAttemptSession(task.id, attempt)
                       }
                     />
                   ))}
@@ -130,69 +134,163 @@ export function GoalChainerBoard({
 
 function GoalTaskCard({
   task,
-  onOpenSession,
+  v2,
+  onOpenLatestSession,
+  onOpenAttemptSession,
 }: {
   task: GoalChainerTask;
-  onOpenSession?: () => void;
+  v2: boolean;
+  onOpenLatestSession?: () => void;
+  onOpenAttemptSession: (attempt: number) => void;
 }) {
+  const attempts = [...(task.sessionAttempts ?? [])].sort(
+    (left, right) => right.attempt - left.attempt,
+  );
   return (
-    <button
-      className={cn(
-        "block w-full rounded-md border border-border bg-surface p-3 text-left",
-        onOpenSession &&
-          "cursor-pointer transition-colors hover:border-border-strong hover:bg-surface-hover",
-      )}
-      disabled={!onOpenSession}
-      onClick={onOpenSession}
-      type="button"
+    <article
+      className="w-full rounded-md border border-border bg-surface p-3 text-left"
+      data-testid={`goal-task-${task.id}`}
     >
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <h3 className="break-words text-xs font-medium">{task.id}</h3>
-          <p className="mt-1 break-words text-[11px] text-muted-foreground">
-            {task.acceptance}
+      <div>
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <h3 className="break-words text-xs font-medium">{task.id}</h3>
+            <p className="mt-1 break-words text-[11px] text-muted-foreground">
+              {task.acceptance}
+            </p>
+          </div>
+          {task.stakes === "high" ? (
+            <span className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] text-warning">
+              high
+            </span>
+          ) : null}
+        </div>
+        {task.scheduledAt ? (
+          <p className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground">
+            <CalendarClock className="size-3" aria-hidden="true" />
+            {new Date(task.scheduledAt).toLocaleString()}
+          </p>
+        ) : null}
+        {task.releaseReason ? (
+          <p className="mt-1 break-words text-[10px] text-passive">
+            {task.releaseReason}
+          </p>
+        ) : null}
+        {task.upstreamBlocked ? (
+          <p className="mt-2 flex items-center gap-1 text-[11px] text-warning">
+            <CircleAlert className="size-3" aria-hidden="true" />
+            Waiting on dependencies
+          </p>
+        ) : null}
+        {task.dependencies.length > 0 ? (
+          <p className="mt-2 break-words text-[10px] text-passive">
+            after {task.dependencies.join(", ")}
+          </p>
+        ) : null}
+      </div>
+
+      {v2 ? (
+        <div className="mt-2 space-y-1 border-t border-border pt-2 text-[10px] text-passive">
+          <p>
+            Role <span className="text-muted-foreground">{task.assignedRole || "unassigned"}</span>
+          </p>
+          <p>
+            Agent{" "}
+            <span className="text-muted-foreground">
+              {task.agentKey || "route-selected"}
+            </span>
+          </p>
+          {task.agentId ? (
+            <a
+              aria-label={`View stable agent ${task.agentKey || task.agentId}`}
+              className="block break-all font-mono text-[9px] text-accent hover:underline"
+              href={`#project-agent-${task.agentId}`}
+              title={task.agentId}
+            >
+              {task.agentId}
+            </a>
+          ) : null}
+          <p>
+            Goal attempts {task.attempts}
+            {attempts.length ? ` · AO history ${attempts.length}` : ""}
           </p>
         </div>
-        {task.stakes === "high" ? (
-          <span className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] text-warning">
-            high
-          </span>
-        ) : null}
-      </div>
-      {task.scheduledAt ? (
-        <p className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground">
-          <CalendarClock className="size-3" aria-hidden="true" />
-          {new Date(task.scheduledAt).toLocaleString()}
-        </p>
+      ) : (
+        <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-passive">
+          <span>{task.assignedAgent || task.capability}</span>
+          {task.sessionId && onOpenLatestSession ? (
+            <button
+              aria-label={`Open ${task.id} session`}
+              className="flex items-center gap-1 text-accent"
+              onClick={onOpenLatestSession}
+              type="button"
+            >
+              <Link2 className="size-3" aria-hidden="true" />
+              {task.sessionId}
+            </button>
+          ) : task.attempts > 0 ? (
+            <span>{task.attempts} attempts</span>
+          ) : null}
+        </div>
+      )}
+
+      {v2 && task.atomspaceLinks?.length ? (
+        <div className="mt-2">
+          <p className="text-[10px] font-medium text-muted-foreground">Logical Atomspaces</p>
+          <ul className="mt-1 space-y-0.5 text-[9px] text-passive">
+            {task.atomspaceLinks.map((link) => (
+              <li key={link.linkKey}>
+                {link.linkKey} · {link.scope} · {link.owner}
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
-      {task.releaseReason ? (
-        <p className="mt-1 break-words text-[10px] text-passive">
-          {task.releaseReason}
-        </p>
+
+      {v2 && attempts.length ? (
+        <div className="mt-2">
+          <p className="text-[10px] font-medium text-muted-foreground">Session attempts</p>
+          <ul className="mt-1 space-y-1">
+            {attempts.map((attempt) => (
+              <li
+                className="rounded border border-border bg-background px-2 py-1.5"
+                key={`${attempt.attempt}:${attempt.sessionId}`}
+              >
+                <p className="text-[10px] text-muted-foreground">
+                  Goal {attempt.attempt} · AO {attempt.agentAttempt} · {attempt.status}
+                </p>
+                <p className="break-all font-mono text-[9px] text-passive">
+                  {attempt.agentId}
+                </p>
+                <button
+                  aria-label={`Open ${task.id} Goal attempt ${attempt.attempt} session`}
+                  className="mt-1 flex items-center gap-1 text-[10px] text-accent"
+                  onClick={() => onOpenAttemptSession(attempt.attempt)}
+                  type="button"
+                >
+                  <Link2 className="size-3" aria-hidden="true" />
+                  {attempt.sessionId}
+                  {attempt.isTerminated ? " · terminated" : ` · ${attempt.activity}`}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : v2 && task.sessionId && onOpenLatestSession ? (
+        <button
+          aria-label={`Open ${task.id} session`}
+          className={cn(
+            "mt-2 flex items-center gap-1 text-[10px] text-accent",
+            "hover:text-accent/80",
+          )}
+          onClick={onOpenLatestSession}
+          type="button"
+        >
+          <Link2 className="size-3" aria-hidden="true" />
+          {task.sessionId}
+        </button>
       ) : null}
-      {task.upstreamBlocked ? (
-        <p className="mt-2 flex items-center gap-1 text-[11px] text-warning">
-          <CircleAlert className="size-3" aria-hidden="true" />
-          Waiting on dependencies
-        </p>
-      ) : null}
-      {task.dependencies.length > 0 ? (
-        <p className="mt-2 break-words text-[10px] text-passive">
-          after {task.dependencies.join(", ")}
-        </p>
-      ) : null}
-      <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-passive">
-        <span>{task.assignedAgent || task.capability}</span>
-        {task.sessionId ? (
-          <span className="flex items-center gap-1 text-accent">
-            <Link2 className="size-3" aria-hidden="true" />
-            {task.sessionId}
-          </span>
-        ) : task.attempts > 0 ? (
-          <span>{task.attempts} attempts</span>
-        ) : null}
-      </div>
-    </button>
+    </article>
   );
 }
 

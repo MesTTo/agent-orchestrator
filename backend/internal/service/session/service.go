@@ -692,6 +692,16 @@ func toAPIError(err error) error {
 		return apierr.Invalid("MCP_PROFILE_UNAVAILABLE", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrExternalMCPProfileMismatch):
 		return apierr.Conflict("EXTERNAL_MCP_PROFILE_MISMATCH", err.Error(), nil)
+	case errors.Is(err, domain.ErrExternalProjectAgentMismatch):
+		return apierr.Conflict("EXTERNAL_PROJECT_AGENT_MISMATCH", "sourceTaskId is already linked to a different project agent", nil)
+	case errors.Is(err, domain.ErrProjectAgentRoleMismatch):
+		return apierr.Conflict("PROJECT_AGENT_ROLE_MISMATCH", "projectAgentKey is already assigned to a different role", nil)
+	case errors.Is(err, sessionmanager.ErrProjectAgentFieldsRequired):
+		return apierr.Invalid("PROJECT_AGENT_FIELDS_INCOMPLETE", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrProjectAgentKeyInvalid):
+		return apierr.Invalid("PROJECT_AGENT_KEY_INVALID", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrProjectAgentRoleInvalid):
+		return apierr.Invalid("PROJECT_AGENT_ROLE_INVALID", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere):
 		return apierr.Conflict("BRANCH_CHECKED_OUT_ELSEWHERE", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchNotFetched):

@@ -138,6 +138,9 @@ var schemaNames = map[string]string{
 	"DomainProjectID":           "ProjectID",
 	"DomainSessionID":           "SessionID",
 	"DomainIssueID":             "IssueID",
+	"DomainProjectAgentID":      "ProjectAgentID",
+	"DomainProjectAgentKey":     "ProjectAgentKey",
+	"DomainProjectAgentRole":    "ProjectAgentRole",
 	"DomainSession":             "Session",
 	"DomainProjectConfig":       "ProjectConfig",
 	"DomainTrackerIntakeConfig": "TrackerIntakeConfig",
@@ -146,6 +149,10 @@ var schemaNames = map[string]string{
 	// httpd/controllers (wire envelopes)
 	"ControllersListProjectsResponse":             "ListProjectsResponse",
 	"ControllersProjectResponse":                  "ProjectResponse",
+	"ControllersProjectAgentIDParam":              "ProjectAgentIDParam",
+	"ControllersListProjectAgentsResponse":        "ListProjectAgentsResponse",
+	"ControllersProjectAgentResponse":             "ProjectAgentResponse",
+	"ControllersProjectAgentNotesResponse":        "ProjectAgentNotesResponse",
 	"ControllersAgentIDParam":                     "AgentIDParam",
 	"ControllersGetProjectResponse":               "ProjectGetResponse",
 	"ControllersProjectOrDegraded":                "ProjectOrDegraded",
@@ -253,8 +260,15 @@ var schemaNames = map[string]string{
 	"ProjectSetConfigInput":             "SetProjectConfigInput",
 	"ProjectUpdateSettingsInput":        "UpdateProjectSettingsInput",
 	"ProjectWorkspaceRepo":              "WorkspaceRepo",
+	"ProjectagentAgent":                 "ProjectAgent",
+	"ProjectagentAttempt":               "ProjectAgentAttempt",
+	"ProjectagentNotesMetadata":         "ProjectAgentNotesMetadata",
+	"ProjectagentNotes":                 "ProjectAgentNotes",
 	"GoalchainerProjection":             "GoalChainerProjection",
 	"GoalchainerTask":                   "GoalChainerTask",
+	"GoalchainerAgent":                  "GoalChainerAgent",
+	"GoalchainerSessionAttempt":         "GoalChainerSessionAttempt",
+	"GoalchainerAtomspaceLink":          "GoalChainerAtomspaceLink",
 	"GoalchainerSummary":                "GoalChainerSummary",
 	"GoalchainerAudit":                  "GoalChainerAudit",
 	"GoalchainerDeleteResult":           "GoalChainerDeleteResult",
@@ -335,6 +349,7 @@ func operations() []operation {
 	ops := append([]operation{}, eventOperations()...)
 	ops = append(ops, agentOperations()...)
 	ops = append(ops, projectOperations()...)
+	ops = append(ops, projectAgentOperations()...)
 	ops = append(ops, goalChainerOperations()...)
 	ops = append(ops, sessionOperations()...)
 	ops = append(ops, prOperations()...)
@@ -346,6 +361,54 @@ func operations() []operation {
 	ops = append(ops, mobileOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
 	return ops
+}
+
+func projectAgentOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/projects/{id}/agents", id: "listProjectAgents", tag: "projects",
+			summary:    "List stable agents and immutable attempts for one project",
+			pathParams: []any{controllers.ProjectIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ListProjectAgentsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/projects/{id}/agents/{agentId}", id: "getProjectAgent", tag: "projects",
+			summary: "Fetch one AO-generated stable project agent",
+			pathParams: []any{
+				controllers.ProjectIDParam{},
+				controllers.ProjectAgentIDParam{},
+			},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ProjectAgentResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/projects/{id}/agents/{agentId}/notes", id: "getProjectAgentNotes", tag: "projects",
+			summary: "Read one validated bounded private MeTTa snapshot",
+			pathParams: []any{
+				controllers.ProjectIDParam{},
+				controllers.ProjectAgentIDParam{},
+			},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ProjectAgentNotesResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+	}
 }
 
 func goalChainerOperations() []operation {

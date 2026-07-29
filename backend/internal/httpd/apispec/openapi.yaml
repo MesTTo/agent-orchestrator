@@ -761,6 +761,163 @@ paths:
       summary: Atomically replace a project's display name and config
       tags:
       - projects
+  /api/v1/projects/{id}/agents:
+    get:
+      operationId: listProjectAgents
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListProjectAgentsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List stable agents and immutable attempts for one project
+      tags:
+      - projects
+  /api/v1/projects/{id}/agents/{agentId}:
+    get:
+      operationId: getProjectAgent
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      - description: AO-generated stable project-agent UUID.
+        in: path
+        name: agentId
+        required: true
+        schema:
+          description: AO-generated stable project-agent UUID.
+          pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectAgentResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Fetch one AO-generated stable project agent
+      tags:
+      - projects
+  /api/v1/projects/{id}/agents/{agentId}/notes:
+    get:
+      operationId: getProjectAgentNotes
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      - description: AO-generated stable project-agent UUID.
+        in: path
+        name: agentId
+        required: true
+        schema:
+          description: AO-generated stable project-agent UUID.
+          pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectAgentNotesResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read one validated bounded private MeTTa snapshot
+      tags:
+      - projects
   /api/v1/projects/{id}/config:
     put:
       operationId: setProjectConfig
@@ -2511,6 +2668,12 @@ components:
           type: integer
         previewUrl:
           type: string
+        projectAgentAttempt:
+          format: int64
+          type: integer
+        projectAgentId:
+          pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+          type: string
         projectId:
           type: string
         prs:
@@ -2675,6 +2838,43 @@ components:
       required:
       - harness
       type: object
+    GoalChainerAgent:
+      properties:
+        agentId:
+          pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+          type: string
+        agentKey:
+          maxLength: 128
+          minLength: 1
+          type: string
+        role:
+          maxLength: 128
+          minLength: 1
+          type: string
+      required:
+      - agentKey
+      - role
+      type: object
+    GoalChainerAtomspaceLink:
+      properties:
+        linkKey:
+          maxLength: 128
+          minLength: 1
+          type: string
+        owner:
+          maxLength: 128
+          minLength: 1
+          type: string
+        scope:
+          enum:
+          - shared
+          - private
+          type: string
+      required:
+      - linkKey
+      - scope
+      - owner
+      type: object
     GoalChainerAudit:
       properties:
         events:
@@ -2698,6 +2898,10 @@ components:
       type: object
     GoalChainerProjection:
       properties:
+        agents:
+          items:
+            $ref: '#/components/schemas/GoalChainerAgent'
+          type: array
         audit:
           $ref: '#/components/schemas/GoalChainerAudit'
         owner:
@@ -2712,6 +2916,7 @@ components:
         protocol:
           enum:
           - goalchainer-ui-v1
+          - goalchainer-ui-v2
           type: string
         semanticDigest:
           pattern: ^[0-9a-f]{64}$
@@ -2751,6 +2956,58 @@ components:
       - summary
       - tasks
       - audit
+      type: object
+    GoalChainerSessionAttempt:
+      properties:
+        activity:
+          enum:
+          - active
+          - idle
+          - waiting_input
+          - blocked
+          - exited
+          type: string
+        agentAttempt:
+          format: int64
+          minimum: 1
+          type: integer
+        agentId:
+          pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+          type: string
+        attempt:
+          minimum: 1
+          type: integer
+        isTerminated:
+          type: boolean
+        sessionId:
+          maxLength: 128
+          minLength: 1
+          type: string
+        status:
+          enum:
+          - working
+          - pr_open
+          - draft
+          - ci_failed
+          - review_pending
+          - changes_requested
+          - approved
+          - mergeable
+          - merged
+          - needs_input
+          - exited
+          - idle
+          - terminated
+          - no_signal
+          type: string
+      required:
+      - attempt
+      - agentId
+      - agentAttempt
+      - sessionId
+      - status
+      - activity
+      - isTerminated
       type: object
     GoalChainerSummary:
       properties:
@@ -2795,9 +3052,22 @@ components:
           maxLength: 128
           minLength: 1
           type: string
+        agentId:
+          pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+          type: string
+        agentKey:
+          maxLength: 128
+          type: string
         assignedAgent:
           maxLength: 128
           type: string
+        assignedRole:
+          maxLength: 128
+          type: string
+        atomspaceLinks:
+          items:
+            $ref: '#/components/schemas/GoalChainerAtomspaceLink'
+          type: array
         attempts:
           minimum: 0
           type: integer
@@ -2823,6 +3093,10 @@ components:
           type:
           - "null"
           - string
+        sessionAttempts:
+          items:
+            $ref: '#/components/schemas/GoalChainerSessionAttempt'
+          type: array
         sessionId:
           type: string
         stakes:
@@ -2949,6 +3223,15 @@ components:
       required:
       - notifications
       - unreadCount
+      type: object
+    ListProjectAgentsResponse:
+      properties:
+        agents:
+          items:
+            $ref: '#/components/schemas/ProjectAgent'
+          type: array
+      required:
+      - agents
       type: object
     ListProjectsResponse:
       properties:
@@ -3237,6 +3520,117 @@ components:
       - path
       - repo
       - defaultBranch
+      type: object
+    ProjectAgent:
+      properties:
+        attempts:
+          items:
+            $ref: '#/components/schemas/ProjectAgentAttempt'
+          type: array
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+          type: string
+        notes:
+          $ref: '#/components/schemas/ProjectAgentNotesMetadata'
+        projectAgentKey:
+          type: string
+        projectId:
+          type: string
+        role:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - id
+      - projectId
+      - projectAgentKey
+      - role
+      - notes
+      - attempts
+      - createdAt
+      - updatedAt
+      type: object
+    ProjectAgentAttempt:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        number:
+          format: int64
+          minimum: 1
+          type: integer
+        sessionId:
+          type: string
+      required:
+      - number
+      - sessionId
+      - createdAt
+      type: object
+    ProjectAgentNotes:
+      properties:
+        agentId:
+          pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+          type: string
+        content:
+          type: string
+        initialized:
+          type: boolean
+        modifiedAt:
+          format: date-time
+          type: string
+        propositionCount:
+          minimum: 0
+          type: integer
+        sizeBytes:
+          format: int64
+          minimum: 0
+          type: integer
+        truncated:
+          type: boolean
+      required:
+      - agentId
+      - content
+      - truncated
+      - initialized
+      - propositionCount
+      - sizeBytes
+      - modifiedAt
+      type: object
+    ProjectAgentNotesMetadata:
+      properties:
+        exists:
+          type: boolean
+        initialized:
+          type: boolean
+        modifiedAt:
+          format: date-time
+          type: string
+        sizeBytes:
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+      - exists
+      - initialized
+      - sizeBytes
+      type: object
+    ProjectAgentNotesResponse:
+      properties:
+        notes:
+          $ref: '#/components/schemas/ProjectAgentNotes'
+      required:
+      - notes
+      type: object
+    ProjectAgentResponse:
+      properties:
+        agent:
+          $ref: '#/components/schemas/ProjectAgent'
+      required:
+      - agent
       type: object
     ProjectConfig:
       properties:
@@ -4023,6 +4417,12 @@ components:
         mcpProfile:
           enum:
           - oh-my-goals
+          type: string
+        projectAgentKey:
+          maxLength: 128
+          type: string
+        projectAgentRole:
+          maxLength: 128
           type: string
         projectId:
           type: string

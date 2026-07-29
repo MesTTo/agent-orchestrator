@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,13 @@ func newGoalChainerServer(t *testing.T) (*httptest.Server, *sqlite.Store) {
 		RegisteredAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("seed project: %v", err)
+	}
+	if err := store.UpsertProject(t.Context(), domain.ProjectRecord{
+		ID:           "project-incident-42",
+		Path:         "/repos/project-incident-42",
+		RegisteredAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed v2 project: %v", err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server := httptest.NewServer(
@@ -137,4 +145,83 @@ func TestGoalChainerProjectionRejectsOversizedBody(t *testing.T) {
 	)
 
 	assertErrorCode(t, response, status, http.StatusBadRequest, "INVALID_JSON")
+}
+
+func TestGoalChainerV2SyncFixtureRoundTripsStableAgentData(t *testing.T) {
+	server, _ := newGoalChainerServer(t)
+	fixture, err := os.ReadFile("testdata/goalchainer-ui-v2.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, status, _ := doRequest(
+		t,
+		server,
+		http.MethodPut,
+		"/api/v1/projects/project-incident-42/goalchainer",
+		string(fixture),
+	)
+	if status != http.StatusOK {
+		t.Fatalf("PUT v2 GoalChainer = %d, body=%s", status, body)
+	}
+	for _, field := range []string{
+		`"protocol":"goalchainer-ui-v2"`,
+		`"agentKey":"local-worker"`,
+		`"agentAttempt":2`,
+		`"linkKey":"worker-private"`,
+	} {
+		if !strings.Contains(string(body), field) {
+			t.Fatalf("PUT v2 response missing %s: %s", field, body)
+		}
+	}
+
+	body, status, _ = doRequest(
+		t,
+		server,
+		http.MethodGet,
+		"/api/v1/projects/project-incident-42/goalchainer",
+		"",
+	)
+	if status != http.StatusOK ||
+		!strings.Contains(string(body), `"sessionId":"ao-session-2"`) {
+		t.Fatalf("GET v2 GoalChainer = %d, body=%s", status, body)
+	}
+}
+
+func TestGoalChainerV2RejectsRouteMismatchAndPhysicalAtomspacePath(t *testing.T) {
+	server, _ := newGoalChainerServer(t)
+	fixture, err := os.ReadFile("testdata/goalchainer-ui-v2.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, status, _ := doRequest(
+		t,
+		server,
+		http.MethodPut,
+		"/api/v1/projects/goalchainer/goalchainer",
+		string(fixture),
+	)
+	assertErrorCode(
+		t,
+		body,
+		status,
+		http.StatusBadRequest,
+		"INVALID_GOALCHAINER_PROJECTION",
+	)
+
+	withPath := strings.Replace(
+		string(fixture),
+		`"owner": "project"`,
+		`"owner": "project", "path": "/private/atomspace.metta"`,
+		1,
+	)
+	body, status, _ = doRequest(
+		t,
+		server,
+		http.MethodPut,
+		"/api/v1/projects/project-incident-42/goalchainer",
+		withPath,
+	)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_JSON")
 }

@@ -24,6 +24,12 @@ func ValidExternalSourceTaskID(value string) bool {
 type SpawnConfig struct {
 	ProjectID domain.ProjectID
 	IssueID   domain.IssueID
+	// ProjectAgentKey is the caller-owned semantic key resolved inside
+	// ProjectID. AO generates the durable UUID and never accepts one here.
+	ProjectAgentKey domain.ProjectAgentKey
+	// ProjectAgentRole is the immutable initial MeTTa-selected role for the
+	// stable project agent.
+	ProjectAgentRole domain.ProjectAgentRole
 	// SourceTaskID is a caller-owned idempotency key for an externally
 	// scheduled task. Empty keeps the normal always-create spawn behavior.
 	SourceTaskID string

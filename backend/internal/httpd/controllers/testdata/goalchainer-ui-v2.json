@@ -1,0 +1,115 @@
+{
+  "protocol": "goalchainer-ui-v2",
+  "projectId": "project-incident-42",
+  "sourceRevision": "a3c0c8a6e6a6c9308f32af7fd614159fd64a35f9ce90f9b443f350b3887275fa",
+  "threadId": "incident-42",
+  "title": "Incident response",
+  "owner": "responder",
+  "semanticDigest": "a3c0c8a6e6a6c9308f32af7fd614159fd64a35f9ce90f9b443f350b3887275fa",
+  "planDigest": "a3c0c8a6e6a6c9308f32af7fd614159fd64a35f9ce90f9b443f350b3887275fa",
+  "usageTokens": 0,
+  "summary": {
+    "total": 2,
+    "scheduled": 0,
+    "backlog": 0,
+    "ready": 0,
+    "inProgress": 2,
+    "blocked": 0,
+    "done": 0,
+    "progressPct": 0
+  },
+  "agents": [
+    {
+      "agentKey": "local-worker",
+      "role": "worker",
+      "agentId": "7e66da4a-2b4f-4e87-865f-14f554070faa"
+    },
+    {
+      "agentKey": "security-specialist",
+      "role": "specialist",
+      "agentId": "272a4c63-64b9-47a0-9624-7fc0fff46aa1"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "collect-evidence",
+      "capability": "local",
+      "acceptance": "evidence-collected",
+      "stakes": "normal",
+      "dependencies": [],
+      "state": "in-progress",
+      "upstreamBlocked": false,
+      "assignedAgent": "local-worker",
+      "assignedRole": "worker",
+      "agentKey": "local-worker",
+      "agentId": "7e66da4a-2b4f-4e87-865f-14f554070faa",
+      "attempts": 1,
+      "sessionId": "ao-session-1",
+      "sessionAttempts": [
+        {
+          "attempt": 1,
+          "agentId": "7e66da4a-2b4f-4e87-865f-14f554070faa",
+          "agentAttempt": 1,
+          "sessionId": "ao-session-1",
+          "status": "working",
+          "activity": "active",
+          "isTerminated": false
+        }
+      ],
+      "atomspaceLinks": [
+        {
+          "linkKey": "project-shared",
+          "scope": "shared",
+          "owner": "project"
+        },
+        {
+          "linkKey": "worker-private",
+          "scope": "private",
+          "owner": "local-worker"
+        }
+      ]
+    },
+    {
+      "id": "redact-summary",
+      "capability": "local",
+      "acceptance": "summary-redacted",
+      "stakes": "high",
+      "dependencies": [],
+      "state": "in-progress",
+      "upstreamBlocked": false,
+      "assignedAgent": "local-worker",
+      "assignedRole": "worker",
+      "agentKey": "local-worker",
+      "agentId": "7e66da4a-2b4f-4e87-865f-14f554070faa",
+      "attempts": 1,
+      "sessionId": "ao-session-2",
+      "sessionAttempts": [
+        {
+          "attempt": 1,
+          "agentId": "7e66da4a-2b4f-4e87-865f-14f554070faa",
+          "agentAttempt": 2,
+          "sessionId": "ao-session-2",
+          "status": "working",
+          "activity": "active",
+          "isTerminated": false
+        }
+      ],
+      "atomspaceLinks": [
+        {
+          "linkKey": "project-shared",
+          "scope": "shared",
+          "owner": "project"
+        },
+        {
+          "linkKey": "worker-private",
+          "scope": "private",
+          "owner": "local-worker"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "events": 1,
+    "head": "a3c0c8a6e6a6c9308f32af7fd614159fd64a35f9ce90f9b443f350b3887275fa"
+  }
+}

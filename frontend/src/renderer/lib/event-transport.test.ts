@@ -138,6 +138,9 @@ describe("createEventTransport", () => {
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
 				queryKey: ["goalchainer"],
 			});
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+				queryKey: ["project-agents"],
+			});
 		} finally {
 			vi.useRealTimers();
 		}

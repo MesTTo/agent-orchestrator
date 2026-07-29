@@ -14,14 +14,19 @@ import goalChainerUiSource from "../metta/goalchainer-ui.metta?raw";
 
 export type GoalChainerAgent = Readonly<{
 	id: string;
+	agentKey?: string;
+	role?: string;
+	agentId?: string;
 	taskIds: readonly string[];
 	sessionIds: readonly string[];
 }>;
 
 export type GoalChainerAgentSpace = Readonly<{
 	tasksForState: (state: GoalChainerTask["state"]) => GoalChainerTask[];
+	agents: () => GoalChainerAgent[];
 	agentForTask: (taskId: string) => GoalChainerAgent | undefined;
 	openTaskSession: (taskId: string) => boolean;
+	openTaskAttemptSession: (taskId: string, attempt: number) => boolean;
 }>;
 
 export function createGoalChainerAgentSpace(
@@ -57,6 +62,17 @@ export function createGoalChainerAgentSpace(
 				),
 			);
 		}
+		for (const attempt of task.sessionAttempts ?? []) {
+			space.addAtom(
+				E(
+					S("gc-task-session-attempt"),
+					ValueAtom(task.id),
+					ValueAtom(attempt.attempt),
+					ValueAtom(attempt.agentAttempt),
+					ValueAtom(attempt.sessionId),
+				),
+			);
+		}
 	}
 	for (const agent of agentsFromProjection(projection)) {
 		space.addAtom(
@@ -84,6 +100,12 @@ export function createGoalChainerAgentSpace(
 				.map(atomToJs)
 				.filter(isGoalChainerTask)
 				.sort(compareTasks),
+		agents: () =>
+			metta
+				.evaluateAtom(E(S("gc-ui-agent")))
+				.map(atomToJs)
+				.filter(isGoalChainerAgent)
+				.sort((left, right) => left.id.localeCompare(right.id)),
 		agentForTask: (taskId) => {
 			const results = metta
 				.evaluateAtom(E(S("gc-ui-agent-for-task"), ValueAtom(taskId)))
@@ -97,12 +119,27 @@ export function createGoalChainerAgentSpace(
 				.map(atomToJs);
 			return results.includes(true);
 		},
+		openTaskAttemptSession: (taskId, attempt) => {
+			const results = metta
+				.evaluateAtom(
+					E(
+						S("gc-ui-open-session-attempt"),
+						ValueAtom(taskId),
+						ValueAtom(attempt),
+					),
+				)
+				.map(atomToJs);
+			return results.includes(true);
+		},
 	};
 }
 
 function agentsFromProjection(
 	projection: GoalChainerProjection,
 ): GoalChainerAgent[] {
+	if (projection.protocol === "goalchainer-ui-v2" && projection.agents) {
+		return agentsFromV2Projection(projection);
+	}
 	const tasksByAgent = new Map<string, GoalChainerTask[]>();
 	for (const task of projection.tasks) {
 		if (!task.assignedAgent) continue;
@@ -118,6 +155,40 @@ function agentsFromProjection(
 				.flatMap((task) => (task.sessionId ? [task.sessionId] : []))
 				.sort(),
 		}))
+		.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function agentsFromV2Projection(
+	projection: GoalChainerProjection,
+): GoalChainerAgent[] {
+	const tasksByAgent = new Map<string, GoalChainerTask[]>();
+	for (const task of projection.tasks) {
+		if (!task.agentKey) continue;
+		const tasks = tasksByAgent.get(task.agentKey) ?? [];
+		tasks.push(task);
+		tasksByAgent.set(task.agentKey, tasks);
+	}
+	return (projection.agents ?? [])
+		.map((agent) => {
+			const tasks = tasksByAgent.get(agent.agentKey) ?? [];
+			return {
+				id: agent.agentKey,
+				agentKey: agent.agentKey,
+				role: agent.role,
+				...(agent.agentId ? { agentId: agent.agentId } : {}),
+				taskIds: tasks.map((task) => task.id).sort(),
+				sessionIds: [
+					...new Set(
+						tasks.flatMap((task) => [
+							...(task.sessionAttempts ?? []).map(
+								(attempt) => attempt.sessionId,
+							),
+							...(task.sessionId ? [task.sessionId] : []),
+						]),
+					),
+				].sort(),
+			};
+		})
 		.sort((left, right) => left.id.localeCompare(right.id));
 }
 

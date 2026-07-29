@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentnotes"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -70,6 +71,10 @@ var (
 	ErrMCPProfileUnsupported      = errors.New("session: MCP profile is unsupported by the selected harness")
 	ErrMCPProfileUnavailable      = errors.New("session: MCP profile runtime is unavailable")
 	ErrExternalMCPProfileMismatch = errors.New("session: external source MCP profile differs from the existing session")
+	ErrProjectAgentFieldsRequired = errors.New("session: project agent key and role must be provided together")
+	ErrProjectAgentKeyInvalid     = errors.New("session: project agent key is invalid")
+	ErrProjectAgentRoleInvalid    = errors.New("session: project agent role is invalid")
+	ErrProjectAgentStoreMissing   = errors.New("session: project agent persistence is unavailable")
 )
 
 // Env vars a spawned process reads to learn who it is.
@@ -81,6 +86,12 @@ const (
 	EnvRuntimeLaunchID = "AO_RUNTIME_LAUNCH_ID"
 	// EnvDataDir tells a spawned agent's AO hook commands where the store lives.
 	EnvDataDir = "AO_DATA_DIR"
+	// EnvProjectAgentID is AO's generated stable identity.
+	EnvProjectAgentID = "AO_PROJECT_AGENT_ID"
+	// EnvProjectAgentRole is the immutable initial MeTTa-selected role.
+	EnvProjectAgentRole = "AO_PROJECT_AGENT_ROLE"
+	// EnvProjectAgentAttempt is the stable agent's AO attempt number.
+	EnvProjectAgentAttempt = "AO_PROJECT_AGENT_ATTEMPT"
 )
 
 // hookBinaryName is the executable name the workspace hook commands invoke:
@@ -188,6 +199,19 @@ type externalSourceStore interface {
 	) (domain.SessionRecord, bool, error)
 }
 
+type externalSourceLookupStore interface {
+	GetSessionForExternalSource(
+		context.Context,
+		domain.ProjectID,
+		string,
+	) (domain.SessionRecord, bool, error)
+}
+
+type projectAgentStore interface {
+	ResolveProjectAgent(context.Context, domain.ProjectAgentRecord) (domain.ProjectAgentRecord, error)
+	GetProjectAgentByID(context.Context, domain.ProjectID, domain.ProjectAgentID) (domain.ProjectAgentRecord, bool, error)
+}
+
 // Manager coordinates internal session spawn, restore, kill, and cleanup over
 // the outbound ports. User-facing read-model assembly lives in the service package.
 type Manager struct {
@@ -211,10 +235,11 @@ type Manager struct {
 	// executable resolves the daemon's own binary (os.Executable in
 	// production); its directory is prepended to spawned sessions' PATH so the
 	// workspace hook commands resolve back to this daemon. Tests inject a stub.
-	executable  func() (string, error)
-	newLaunchID func() string
-	resumeMu    sync.Mutex
-	resuming    map[domain.SessionID]struct{}
+	executable        func() (string, error)
+	newLaunchID       func() string
+	newProjectAgentID func() string
+	resumeMu          sync.Mutex
+	resuming          map[domain.SessionID]struct{}
 	// externalSpawnMu guards one lock per caller-owned source task. Calls for
 	// the same source wait for the first launch to finish before observing the
 	// durable idempotency row. Different source tasks still launch in parallel.
@@ -309,6 +334,8 @@ type Deps struct {
 	Executable func() (string, error)
 	// NewLaunchID overrides supervised-process generation for deterministic tests.
 	NewLaunchID func() string
+	// NewProjectAgentID overrides stable UUID generation for deterministic tests.
+	NewProjectAgentID func() string
 	// Logger receives spawn-time diagnostics (e.g. when the session PATH
 	// cannot be pinned to the daemon binary). Nil defaults to slog.Default().
 	Logger *slog.Logger
@@ -328,6 +355,7 @@ func New(d Deps) *Manager {
 		lookPath:           d.LookPath,
 		executable:         d.Executable,
 		newLaunchID:        d.NewLaunchID,
+		newProjectAgentID:  d.NewProjectAgentID,
 		resuming:           make(map[domain.SessionID]struct{}),
 		externalSpawnLocks: make(map[string]*sync.Mutex),
 		sendConfirm: sendConfirmConfig{
@@ -351,6 +379,9 @@ func New(d Deps) *Manager {
 	}
 	if m.newLaunchID == nil {
 		m.newLaunchID = uuid.NewString
+	}
+	if m.newProjectAgentID == nil {
+		m.newProjectAgentID = uuid.NewString
 	}
 	if m.logger == nil {
 		m.logger = slog.Default()
@@ -434,6 +465,17 @@ func (m *Manager) spawn(
 	if err := m.validateMCPProfileSupport(cfg.MCPProfile, cfg.Harness, agent); err != nil {
 		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: %w", err)
 	}
+	if cfg.SourceTaskID != "" {
+		if rec, found, err := m.externalSourceReplay(ctx, cfg); err != nil {
+			return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: %w", err)
+		} else if found {
+			return rec, len(rec.Metadata.Prompt), 0, false, nil
+		}
+	}
+	projectAgent, agentPaths, err := m.resolveProjectAgent(ctx, cfg)
+	if err != nil {
+		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: %w", err)
+	}
 
 	if err := m.validateRuntimePrerequisites(); err != nil {
 		return domain.SessionRecord{}, 0, 0, false, fmt.Errorf("spawn: %w", err)
@@ -447,6 +489,7 @@ func (m *Manager) spawn(
 	systemPromptBytes := len(systemPrompt)
 
 	seed := seedRecord(cfg, m.clock())
+	seed.ProjectAgentID = projectAgent.ID
 	rec := domain.SessionRecord{}
 	created := true
 	if cfg.SourceTaskID == "" {
@@ -535,6 +578,7 @@ func (m *Manager) spawn(
 
 	agentConfig := effectiveAgentConfig(cfg.Kind, project.Config)
 	env := m.runtimeEnv(id, cfg.ProjectID, cfg.IssueID, project.Config.Env)
+	applyProjectAgentEnv(env, rec, projectAgent, agentPaths, cfg.MCPProfile)
 	m.augmentAgentRuntimeEnv(agent, env)
 	if err := m.prepareWorkspace(ctx, agent, id, ws.Path, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false)
@@ -1249,6 +1293,12 @@ func (m *Manager) relaunchSession(ctx context.Context, operation string, rec dom
 	// model/permissions carry across a restore, matching fresh spawn.
 	agentConfig := effectiveAgentConfig(rec.Kind, project.Config)
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	projectAgent, agentPaths, err := m.loadProjectAgentRuntime(ctx, rec)
+	if err != nil {
+		m.cleanupSystemPromptDir(rec.ID)
+		return RestoreResult{}, fmt.Errorf("%s %s: project agent: %w", operation, rec.ID, err)
+	}
+	applyProjectAgentEnv(env, rec, projectAgent, agentPaths, rec.Metadata.MCPProfile)
 	m.augmentAgentRuntimeEnv(agent, env)
 	if err := m.prepareWorkspace(ctx, agent, rec.ID, ws.Path, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
@@ -2332,6 +2382,224 @@ func seedRecord(cfg ports.SpawnConfig, now time.Time) domain.SessionRecord {
 		Activity:    domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
 		Metadata:    domain.SessionMetadata{MCPProfile: cfg.MCPProfile},
 	}
+}
+
+func (m *Manager) resolveProjectAgent(
+	ctx context.Context,
+	cfg ports.SpawnConfig,
+) (domain.ProjectAgentRecord, agentnotes.Paths, error) {
+	key := domain.ProjectAgentKey(strings.TrimSpace(string(cfg.ProjectAgentKey)))
+	role := domain.ProjectAgentRole(strings.TrimSpace(string(cfg.ProjectAgentRole)))
+	if key == "" && role == "" {
+		return domain.ProjectAgentRecord{}, agentnotes.Paths{}, nil
+	}
+	if key == "" || role == "" {
+		return domain.ProjectAgentRecord{}, agentnotes.Paths{}, ErrProjectAgentFieldsRequired
+	}
+	if !domain.ValidProjectAgentKey(key) {
+		return domain.ProjectAgentRecord{}, agentnotes.Paths{}, ErrProjectAgentKeyInvalid
+	}
+	if !domain.ValidProjectAgentRole(role) {
+		return domain.ProjectAgentRecord{}, agentnotes.Paths{}, ErrProjectAgentRoleInvalid
+	}
+	store, ok := m.store.(projectAgentStore)
+	if !ok {
+		return domain.ProjectAgentRecord{}, agentnotes.Paths{}, ErrProjectAgentStoreMissing
+	}
+	now := m.clock().UTC()
+	candidateID := domain.ProjectAgentID(strings.ToLower(m.newProjectAgentID()))
+	if !domain.ValidProjectAgentID(candidateID) {
+		return domain.ProjectAgentRecord{}, agentnotes.Paths{}, errors.New(
+			"project agent UUID generator returned an invalid id",
+		)
+	}
+	candidate := domain.ProjectAgentRecord{
+		ID:                candidateID,
+		ProjectID:         cfg.ProjectID,
+		ProjectAgentKey:   key,
+		Role:              role,
+		NotesRelativePath: agentnotes.AgentRelativePath(cfg.ProjectID, candidateID),
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	candidatePaths, err := agentnotes.Ensure(
+		m.dataDir,
+		candidate.ProjectID,
+		candidate.ID,
+		candidate.NotesRelativePath,
+	)
+	if err != nil {
+		return domain.ProjectAgentRecord{}, agentnotes.Paths{}, err
+	}
+	resolved, err := store.ResolveProjectAgent(ctx, candidate)
+	if err != nil {
+		if cleanupErr := agentnotes.RemoveCreatedPrivate(
+			m.dataDir,
+			candidate.ProjectID,
+			candidate.ID,
+			candidatePaths,
+		); cleanupErr != nil {
+			m.logger.Warn(
+				"project agent: clean private file after persistence failure",
+				"projectID", candidate.ProjectID,
+				"error", cleanupErr,
+			)
+		}
+		return domain.ProjectAgentRecord{}, agentnotes.Paths{}, err
+	}
+	if resolved.ID == candidate.ID {
+		return resolved, candidatePaths, nil
+	}
+	if cleanupErr := agentnotes.RemoveCreatedPrivate(
+		m.dataDir,
+		candidate.ProjectID,
+		candidate.ID,
+		candidatePaths,
+	); cleanupErr != nil {
+		return domain.ProjectAgentRecord{}, agentnotes.Paths{}, cleanupErr
+	}
+	paths, err := agentnotes.Ensure(
+		m.dataDir,
+		resolved.ProjectID,
+		resolved.ID,
+		resolved.NotesRelativePath,
+	)
+	if err != nil {
+		return domain.ProjectAgentRecord{}, agentnotes.Paths{}, err
+	}
+	return resolved, paths, nil
+}
+
+func (m *Manager) externalSourceReplay(
+	ctx context.Context,
+	cfg ports.SpawnConfig,
+) (domain.SessionRecord, bool, error) {
+	lookup, ok := m.store.(externalSourceLookupStore)
+	if !ok {
+		return domain.SessionRecord{}, false, nil
+	}
+	rec, found, err := lookup.GetSessionForExternalSource(
+		ctx,
+		cfg.ProjectID,
+		cfg.SourceTaskID,
+	)
+	if err != nil || !found {
+		return rec, found, err
+	}
+	key := domain.ProjectAgentKey(strings.TrimSpace(string(cfg.ProjectAgentKey)))
+	role := domain.ProjectAgentRole(strings.TrimSpace(string(cfg.ProjectAgentRole)))
+	if (key == "") != (role == "") {
+		return domain.SessionRecord{}, false, ErrProjectAgentFieldsRequired
+	}
+	if key != "" && !domain.ValidProjectAgentKey(key) {
+		return domain.SessionRecord{}, false, ErrProjectAgentKeyInvalid
+	}
+	if role != "" && !domain.ValidProjectAgentRole(role) {
+		return domain.SessionRecord{}, false, ErrProjectAgentRoleInvalid
+	}
+	if rec.ProjectAgentID == "" {
+		if key != "" {
+			return domain.SessionRecord{}, false, &domain.ExternalProjectAgentMismatchError{
+				SessionID: rec.ID,
+			}
+		}
+	} else {
+		if key == "" {
+			return domain.SessionRecord{}, false, &domain.ExternalProjectAgentMismatchError{
+				SessionID:       rec.ID,
+				ExistingAgentID: rec.ProjectAgentID,
+			}
+		}
+		store, ok := m.store.(projectAgentStore)
+		if !ok {
+			return domain.SessionRecord{}, false, ErrProjectAgentStoreMissing
+		}
+		agent, ok, err := store.GetProjectAgentByID(ctx, rec.ProjectID, rec.ProjectAgentID)
+		if err != nil {
+			return domain.SessionRecord{}, false, err
+		}
+		if !ok {
+			return domain.SessionRecord{}, false, errors.New(
+				"stable project agent linked to external session is missing",
+			)
+		}
+		if agent.ProjectAgentKey != key {
+			return domain.SessionRecord{}, false, &domain.ExternalProjectAgentMismatchError{
+				SessionID:       rec.ID,
+				ExistingAgentID: rec.ProjectAgentID,
+			}
+		}
+		if agent.Role != role {
+			return domain.SessionRecord{}, false, &domain.ProjectAgentRoleMismatchError{
+				AgentID:       agent.ID,
+				ExistingRole:  agent.Role,
+				RequestedRole: role,
+			}
+		}
+	}
+	if rec.Metadata.MCPProfile != cfg.MCPProfile {
+		return domain.SessionRecord{}, false, ErrExternalMCPProfileMismatch
+	}
+	if !rec.IsTerminated && strings.TrimSpace(rec.Metadata.RuntimeHandleID) == "" {
+		return domain.SessionRecord{}, false, errors.New(
+			"external source session is not ready",
+		)
+	}
+	return rec, true, nil
+}
+
+func (m *Manager) loadProjectAgentRuntime(
+	ctx context.Context,
+	rec domain.SessionRecord,
+) (domain.ProjectAgentRecord, agentnotes.Paths, error) {
+	if rec.ProjectAgentID == "" {
+		return domain.ProjectAgentRecord{}, agentnotes.Paths{}, nil
+	}
+	store, ok := m.store.(projectAgentStore)
+	if !ok {
+		return domain.ProjectAgentRecord{}, agentnotes.Paths{}, ErrProjectAgentStoreMissing
+	}
+	record, ok, err := store.GetProjectAgentByID(ctx, rec.ProjectID, rec.ProjectAgentID)
+	if err != nil {
+		return domain.ProjectAgentRecord{}, agentnotes.Paths{}, err
+	}
+	if !ok {
+		return domain.ProjectAgentRecord{}, agentnotes.Paths{}, errors.New(
+			"stable project agent linked to session is missing",
+		)
+	}
+	paths, err := agentnotes.Ensure(
+		m.dataDir,
+		record.ProjectID,
+		record.ID,
+		record.NotesRelativePath,
+	)
+	if err != nil {
+		return domain.ProjectAgentRecord{}, agentnotes.Paths{}, err
+	}
+	return record, paths, nil
+}
+
+func applyProjectAgentEnv(
+	env map[string]string,
+	rec domain.SessionRecord,
+	agent domain.ProjectAgentRecord,
+	paths agentnotes.Paths,
+	profile domain.MCPProfile,
+) {
+	if agent.ID == "" {
+		return
+	}
+	env[EnvProjectAgentID] = string(agent.ID)
+	env[EnvProjectAgentRole] = string(agent.Role)
+	env[EnvProjectAgentAttempt] = strconv.FormatInt(rec.ProjectAgentAttempt, 10)
+	if profile != domain.MCPProfileOhMyGoals {
+		return
+	}
+	env[ohMyGoalsAgentIDEnv] = string(agent.ID)
+	env[ohMyGoalsAtomspacePathEnv] = paths.Private
+	env[ohMyGoalsProjectAtomspacePathEnv] = paths.Project
+	env[ohMyGoalsAttemptEnv] = strconv.FormatInt(rec.ProjectAgentAttempt, 10)
 }
 
 func defaultSessionBranch(id domain.SessionID, kind domain.SessionKind, prefix, branchNamespace string) string {

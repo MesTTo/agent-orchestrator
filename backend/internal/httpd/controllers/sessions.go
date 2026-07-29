@@ -153,7 +153,7 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 	// oversized base64 payload can't allocate in full first.
 	r.Body = http.MaxBytesReader(w, r.Body, maxSpawnBodyBytes)
 	var in SpawnSessionRequest
-	if err := decodeJSON(r, &in); err != nil {
+	if err := decodeJSONStrict(r, &in); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
@@ -168,6 +168,20 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 	sourceTaskID := strings.TrimSpace(in.SourceTaskID)
 	if sourceTaskID != "" && !ports.ValidExternalSourceTaskID(sourceTaskID) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "SOURCE_TASK_ID_INVALID", "sourceTaskId must contain 1 to 128 safe identifier characters", nil)
+		return
+	}
+	projectAgentKey := domain.ProjectAgentKey(strings.TrimSpace(string(in.ProjectAgentKey)))
+	projectAgentRole := domain.ProjectAgentRole(strings.TrimSpace(string(in.ProjectAgentRole)))
+	if (projectAgentKey == "") != (projectAgentRole == "") {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROJECT_AGENT_FIELDS_INCOMPLETE", "projectAgentKey and projectAgentRole must be provided together", nil)
+		return
+	}
+	if projectAgentKey != "" && !domain.ValidProjectAgentKey(projectAgentKey) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROJECT_AGENT_KEY_INVALID", "projectAgentKey must contain 1 to 128 safe identifier characters", nil)
+		return
+	}
+	if projectAgentRole != "" && !domain.ValidProjectAgentRole(projectAgentRole) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROJECT_AGENT_ROLE_INVALID", "projectAgentRole must contain 1 to 128 safe identifier characters", nil)
 		return
 	}
 	if !in.MCPProfile.Valid() {
@@ -192,16 +206,18 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := ports.SpawnConfig{
-		ProjectID:    in.ProjectID,
-		IssueID:      in.IssueID,
-		SourceTaskID: sourceTaskID,
-		MCPProfile:   in.MCPProfile,
-		Kind:         in.Kind,
-		Harness:      in.Harness,
-		Branch:       in.Branch,
-		Prompt:       in.Prompt,
-		DisplayName:  displayName,
-		Attachments:  attachments,
+		ProjectID:        in.ProjectID,
+		IssueID:          in.IssueID,
+		ProjectAgentKey:  projectAgentKey,
+		ProjectAgentRole: projectAgentRole,
+		SourceTaskID:     sourceTaskID,
+		MCPProfile:       in.MCPProfile,
+		Kind:             in.Kind,
+		Harness:          in.Harness,
+		Branch:           in.Branch,
+		Prompt:           in.Prompt,
+		DisplayName:      displayName,
+		Attachments:      attachments,
 	}
 	created := true
 	var sess domain.Session

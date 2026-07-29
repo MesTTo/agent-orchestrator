@@ -15,6 +15,7 @@ import (
 	goalchainersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/goalchainer"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	projectagentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/projectagent"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 )
 
@@ -22,6 +23,7 @@ import (
 type APIDeps struct {
 	Agents             controllers.AgentCatalog
 	Projects           projectsvc.Manager
+	ProjectAgents      projectagentsvc.Manager
 	GoalChainer        goalchainersvc.Manager
 	Sessions           controllers.SessionService
 	Activity           controllers.ActivityRecorder
@@ -45,6 +47,7 @@ type API struct {
 	cfg           config.Config
 	agents        *controllers.AgentsController
 	projects      *controllers.ProjectsController
+	projectAgents *controllers.ProjectAgentsController
 	goalchainer   *controllers.GoalChainerController
 	sessions      *controllers.SessionsController
 	prs           *controllers.PRsController
@@ -68,6 +71,9 @@ func NewAPI(cfg config.Config, deps APIDeps) *API {
 		},
 		projects: &controllers.ProjectsController{
 			Mgr: deps.Projects,
+		},
+		projectAgents: &controllers.ProjectAgentsController{
+			Mgr: deps.ProjectAgents,
 		},
 		goalchainer: &controllers.GoalChainerController{
 			Mgr: deps.GoalChainer,
@@ -103,6 +109,7 @@ func (a *API) Register(root chi.Router) {
 			r.Use(middleware.Timeout(timeout))
 			a.agents.Register(r)
 			a.projects.Register(r)
+			a.projectAgents.Register(r)
 			a.goalchainer.Register(r)
 			a.sessions.Register(r)
 			a.prs.Register(r)

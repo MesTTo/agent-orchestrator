@@ -54,6 +54,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 					void queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey() });
 					void queryClient.invalidateQueries({ queryKey: ["goalchainer"] });
+					void queryClient.invalidateQueries({ queryKey: ["project-agents"] });
 				}, INVALIDATE_DEBOUNCE_MS);
 			};
 

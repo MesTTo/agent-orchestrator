@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
 import { GoalChainerBoard } from "../components/GoalChainerBoard";
+import { ProjectAgentsPanel } from "../components/ProjectAgentsPanel";
 import { SessionsBoard } from "../components/SessionsBoard";
 import { useGoalChainerQuery } from "../hooks/useGoalChainerQuery";
 import { cn } from "../lib/utils";
@@ -31,7 +32,12 @@ function ProjectBoardRoute() {
 			</div>
 			<div className="min-h-0 flex-1">
 				{view === "agents" ? (
-					<SessionsBoard projectId={projectId} />
+					<div className="flex h-full min-h-0 flex-col">
+						<ProjectAgentsPanel projectId={projectId} />
+						<div className="min-h-0 flex-1">
+							<SessionsBoard projectId={projectId} />
+						</div>
+					</div>
 				) : goalChainer.isLoading ? (
 					<p className="py-10 text-center text-xs text-passive">Loading GoalChainer board...</p>
 				) : goalChainer.isError ? (

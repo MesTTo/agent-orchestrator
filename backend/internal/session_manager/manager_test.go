@@ -24,13 +24,17 @@ import (
 var ctx = context.Background()
 
 type fakeStore struct {
-	sessions      map[domain.SessionID]domain.SessionRecord
-	pr            map[domain.SessionID]domain.PRFacts
-	projects      map[string]domain.ProjectRecord
-	workspaceRepo map[string][]domain.WorkspaceRepoRecord
-	num           int
-	deleteErr     error
-	upsertWTErr   error
+	sessions          map[domain.SessionID]domain.SessionRecord
+	pr                map[domain.SessionID]domain.PRFacts
+	projects          map[string]domain.ProjectRecord
+	workspaceRepo     map[string][]domain.WorkspaceRepoRecord
+	projectAgents     map[string]domain.ProjectAgentRecord
+	projectAttempts   map[domain.ProjectAgentID][]domain.ProjectAgentAttemptRecord
+	resolveAgentErr   error
+	resolveCandidates []domain.ProjectAgentRecord
+	num               int
+	deleteErr         error
+	upsertWTErr       error
 	// worktrees maps session ID to its saved worktree rows (shutdown-saved marker).
 	worktrees map[domain.SessionID][]domain.SessionWorktreeRecord
 	// sharedLog, when non-nil, receives an ordered call entry for each
@@ -40,11 +44,13 @@ type fakeStore struct {
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		sessions:      map[domain.SessionID]domain.SessionRecord{},
-		pr:            map[domain.SessionID]domain.PRFacts{},
-		projects:      map[string]domain.ProjectRecord{},
-		workspaceRepo: map[string][]domain.WorkspaceRepoRecord{},
-		worktrees:     map[domain.SessionID][]domain.SessionWorktreeRecord{},
+		sessions:        map[domain.SessionID]domain.SessionRecord{},
+		pr:              map[domain.SessionID]domain.PRFacts{},
+		projects:        map[string]domain.ProjectRecord{},
+		workspaceRepo:   map[string][]domain.WorkspaceRepoRecord{},
+		projectAgents:   map[string]domain.ProjectAgentRecord{},
+		projectAttempts: map[domain.ProjectAgentID][]domain.ProjectAgentAttemptRecord{},
+		worktrees:       map[domain.SessionID][]domain.SessionWorktreeRecord{},
 	}
 }
 
@@ -77,6 +83,22 @@ func (f *blockingExternalStore) CreateSessionForExternalSource(
 	f.sources[key] = created.ID
 	return created, true, nil
 }
+
+func (f *blockingExternalStore) GetSessionForExternalSource(
+	_ context.Context,
+	projectID domain.ProjectID,
+	sourceTaskID string,
+) (domain.SessionRecord, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id, ok := f.sources[string(projectID)+"\x00"+sourceTaskID]
+	if !ok {
+		return domain.SessionRecord{}, false, nil
+	}
+	rec, ok := f.sessions[id]
+	return rec, ok, nil
+}
+
 func (f *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectRecord, bool, error) {
 	r, ok := f.projects[id]
 	return r, ok, nil
@@ -87,8 +109,70 @@ func (f *fakeStore) ListWorkspaceRepos(_ context.Context, projectID string) ([]d
 func (f *fakeStore) CreateSession(_ context.Context, rec domain.SessionRecord) (domain.SessionRecord, error) {
 	f.num++
 	rec.ID = domain.SessionID(fmt.Sprintf("%s-%d", rec.ProjectID, f.num))
+	if err := f.linkProjectAgentAttempt(&rec); err != nil {
+		return domain.SessionRecord{}, err
+	}
 	f.sessions[rec.ID] = rec
 	return rec, nil
+}
+
+func (f *fakeStore) ResolveProjectAgent(
+	_ context.Context,
+	record domain.ProjectAgentRecord,
+) (domain.ProjectAgentRecord, error) {
+	f.resolveCandidates = append(f.resolveCandidates, record)
+	if f.resolveAgentErr != nil {
+		return domain.ProjectAgentRecord{}, f.resolveAgentErr
+	}
+	key := string(record.ProjectID) + "\x00" + string(record.ProjectAgentKey)
+	if existing, ok := f.projectAgents[key]; ok {
+		if existing.Role != record.Role {
+			return domain.ProjectAgentRecord{}, &domain.ProjectAgentRoleMismatchError{
+				AgentID:       existing.ID,
+				ExistingRole:  existing.Role,
+				RequestedRole: record.Role,
+			}
+		}
+		return existing, nil
+	}
+	f.projectAgents[key] = record
+	return record, nil
+}
+
+func (f *fakeStore) GetProjectAgentByID(
+	_ context.Context,
+	projectID domain.ProjectID,
+	agentID domain.ProjectAgentID,
+) (domain.ProjectAgentRecord, bool, error) {
+	for _, record := range f.projectAgents {
+		if record.ProjectID == projectID && record.ID == agentID {
+			return record, true, nil
+		}
+	}
+	return domain.ProjectAgentRecord{}, false, nil
+}
+
+func (f *fakeStore) linkProjectAgentAttempt(rec *domain.SessionRecord) error {
+	if rec.ProjectAgentID == "" {
+		return nil
+	}
+	agent, ok, err := f.GetProjectAgentByID(context.Background(), rec.ProjectID, rec.ProjectAgentID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("project agent does not belong to session project")
+	}
+	attempt := domain.ProjectAgentAttemptRecord{
+		ProjectID: rec.ProjectID,
+		AgentID:   agent.ID,
+		Attempt:   int64(len(f.projectAttempts[agent.ID]) + 1),
+		SessionID: rec.ID,
+		CreatedAt: rec.CreatedAt,
+	}
+	f.projectAttempts[agent.ID] = append(f.projectAttempts[agent.ID], attempt)
+	rec.ProjectAgentAttempt = attempt.Attempt
+	return nil
 }
 func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) error {
 	f.sessions[rec.ID] = rec

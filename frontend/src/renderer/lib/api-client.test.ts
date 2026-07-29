@@ -186,6 +186,15 @@ describe("subscribeApiBaseUrl", () => {
 });
 
 describe("normalizeApiOperation", () => {
+	it("scrubs both project and stable-agent identifiers", () => {
+		expect(
+			normalizeApiOperation(
+				"get",
+				"/api/v1/projects/private-project/agents/7e66da4a-2b4f-4e87-865f-14f554070faa/notes",
+			),
+		).toBe("GET /api/v1/projects/:id/agents/:id/notes");
+	});
+
 	it("replaces identifier segments after resource collections", () => {
 		expect(normalizeApiOperation("get", "/api/v1/projects/my project id")).toBe("GET /api/v1/projects/:id");
 		expect(normalizeApiOperation("POST", "/api/v1/sessions/ao-42/kill")).toBe("POST /api/v1/sessions/:id/kill");
