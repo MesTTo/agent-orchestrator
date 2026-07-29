@@ -128,6 +128,23 @@ func (s *Store) ListProjectAgentAttempts(
 	return projectAgentAttemptsFromGen(rows), nil
 }
 
+// ListProjectAgentAttemptsByProject returns all immutable stable-agent attempts
+// for one project in one query.
+func (s *Store) ListProjectAgentAttemptsByProject(
+	ctx context.Context,
+	projectID domain.ProjectID,
+) ([]domain.ProjectAgentAttemptRecord, error) {
+	rows, err := s.qr.ListProjectAgentAttemptsByProject(ctx, projectID)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"list project agent attempts for project %s: %w",
+			projectID,
+			err,
+		)
+	}
+	return projectAgentAttemptsFromGen(rows), nil
+}
+
 func projectAgentFromGen(row gen.ProjectAgent) domain.ProjectAgentRecord {
 	return domain.ProjectAgentRecord{
 		ID:                row.ID,

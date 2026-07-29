@@ -35,6 +35,8 @@ limited to 256 KiB on complete lines.
 GoalChainer projection v2 carries a path-free project-agent registry, separate
 Goal and AO attempts, complete session history, and logical Atomspace links.
 Projection v1 remains accepted with its prior stored JSON shape.
+AO validates every bound UUID, key, role, and session attempt against SQLite
+while leaving declarations that have not observed a UUID unbound.
 
 ## Consequences
 

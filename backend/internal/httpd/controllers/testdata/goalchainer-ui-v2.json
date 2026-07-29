@@ -44,13 +44,13 @@
       "agentKey": "local-worker",
       "agentId": "7e66da4a-2b4f-4e87-865f-14f554070faa",
       "attempts": 1,
-      "sessionId": "ao-session-1",
+      "sessionId": "project-incident-42-1",
       "sessionAttempts": [
         {
           "attempt": 1,
           "agentId": "7e66da4a-2b4f-4e87-865f-14f554070faa",
           "agentAttempt": 1,
-          "sessionId": "ao-session-1",
+          "sessionId": "project-incident-42-1",
           "status": "working",
           "activity": "active",
           "isTerminated": false
@@ -82,13 +82,13 @@
       "agentKey": "local-worker",
       "agentId": "7e66da4a-2b4f-4e87-865f-14f554070faa",
       "attempts": 1,
-      "sessionId": "ao-session-2",
+      "sessionId": "project-incident-42-2",
       "sessionAttempts": [
         {
           "attempt": 1,
           "agentId": "7e66da4a-2b4f-4e87-865f-14f554070faa",
           "agentAttempt": 2,
-          "sessionId": "ao-session-2",
+          "sessionId": "project-incident-42-2",
           "status": "working",
           "activity": "active",
           "isTerminated": false

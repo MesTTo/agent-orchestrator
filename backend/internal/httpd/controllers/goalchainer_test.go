@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentnotes"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
@@ -18,6 +20,11 @@ import (
 )
 
 const goalChainerDigest = "a3c0c8a6e6a6c9308f32af7fd614159fd64a35f9ce90f9b443f350b3887275fa"
+
+const (
+	fixtureWorkerID     domain.ProjectAgentID = "7e66da4a-2b4f-4e87-865f-14f554070faa"
+	fixtureSpecialistID domain.ProjectAgentID = "272a4c63-64b9-47a0-9624-7fc0fff46aa1"
+)
 
 func newGoalChainerServer(t *testing.T) (*httptest.Server, *sqlite.Store) {
 	t.Helper()
@@ -52,6 +59,56 @@ func newGoalChainerServer(t *testing.T) (*httptest.Server, *sqlite.Store) {
 	)
 	t.Cleanup(server.Close)
 	return server, store
+}
+
+func seedGoalChainerProjectAgents(t *testing.T, store *sqlite.Store) {
+	t.Helper()
+	now := time.Date(2026, 7, 29, 4, 0, 0, 0, time.UTC)
+	for _, agent := range []domain.ProjectAgentRecord{
+		{
+			ID:                fixtureWorkerID,
+			ProjectID:         "project-incident-42",
+			ProjectAgentKey:   "local-worker",
+			Role:              "worker",
+			NotesRelativePath: agentnotes.AgentRelativePath("project-incident-42", fixtureWorkerID),
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		},
+		{
+			ID:                fixtureSpecialistID,
+			ProjectID:         "project-incident-42",
+			ProjectAgentKey:   "security-specialist",
+			Role:              "specialist",
+			NotesRelativePath: agentnotes.AgentRelativePath("project-incident-42", fixtureSpecialistID),
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		},
+	} {
+		if _, err := store.ResolveProjectAgent(t.Context(), agent); err != nil {
+			t.Fatalf("seed project agent %s: %v", agent.ProjectAgentKey, err)
+		}
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		session, err := store.CreateSession(t.Context(), domain.SessionRecord{
+			ProjectID:      "project-incident-42",
+			ProjectAgentID: fixtureWorkerID,
+			Kind:           domain.KindWorker,
+			Harness:        domain.HarnessFake,
+			Activity: domain.Activity{
+				State:          domain.ActivityActive,
+				LastActivityAt: now,
+			},
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("seed project-agent attempt %d: %v", attempt, err)
+		}
+		wantID := domain.SessionID("project-incident-42-" + strconv.Itoa(attempt))
+		if session.ID != wantID || session.ProjectAgentAttempt != int64(attempt) {
+			t.Fatalf("seeded attempt = %#v, want session %s attempt %d", session, wantID, attempt)
+		}
+	}
 }
 
 func validGoalChainerBody() string {
@@ -148,7 +205,8 @@ func TestGoalChainerProjectionRejectsOversizedBody(t *testing.T) {
 }
 
 func TestGoalChainerV2SyncFixtureRoundTripsStableAgentData(t *testing.T) {
-	server, _ := newGoalChainerServer(t)
+	server, store := newGoalChainerServer(t)
+	seedGoalChainerProjectAgents(t, store)
 	fixture, err := os.ReadFile("testdata/goalchainer-ui-v2.json")
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +241,7 @@ func TestGoalChainerV2SyncFixtureRoundTripsStableAgentData(t *testing.T) {
 		"",
 	)
 	if status != http.StatusOK ||
-		!strings.Contains(string(body), `"sessionId":"ao-session-2"`) {
+		!strings.Contains(string(body), `"sessionId":"project-incident-42-2"`) {
 		t.Fatalf("GET v2 GoalChainer = %d, body=%s", status, body)
 	}
 }

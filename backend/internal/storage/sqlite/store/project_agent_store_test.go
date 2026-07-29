@@ -80,6 +80,10 @@ func TestProjectAgentAttemptsAreImmutableMonotonicAndProjectScoped(t *testing.T)
 	if len(attempts) != count {
 		t.Fatalf("attempts = %d, want %d", len(attempts), count)
 	}
+	projectAttempts, err := store.ListProjectAgentAttemptsByProject(ctx, "research")
+	if err != nil || len(projectAttempts) != count {
+		t.Fatalf("project attempts = %#v, %v", projectAttempts, err)
+	}
 	seen := map[int64]bool{}
 	for _, attempt := range attempts {
 		if attempt.ProjectID != "research" || attempt.AgentID != agent.ID {

@@ -40,6 +40,8 @@ session attempt history, and logical Atomspace links. AO checks that:
 
 - the projection project ID matches the route;
 - agent keys, roles, and bound UUIDs are unique;
+- every bound UUID, key, role, and session attempt matches AO's SQLite
+  authority;
 - task assignments refer to declared agents;
 - Goal attempts are contiguous from 1;
 - AO agent attempts are positive and unique per stable agent;
@@ -51,6 +53,8 @@ session attempt history, and logical Atomspace links. AO checks that:
 An `either` task may remain unassigned before its first dispatch. In that state
 it has no attempts or private link. Historical attempts may name an earlier
 stable agent when GoalChainer rerouted the task.
+An agent declaration that has not observed its AO UUID remains unbound. If AO
+already owns the same project key, its immutable role must still match.
 
 The session creation API accepts `sourceTaskId`, `projectAgentKey`, and
 `projectAgentRole`. The key and role must be supplied together. AO resolves

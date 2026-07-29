@@ -37,6 +37,8 @@ type Store interface {
 	UpsertGoalChainerProjection(context.Context, domain.GoalChainerProjectionRecord) (domain.GoalChainerProjectionRecord, error)
 	GetGoalChainerProjection(context.Context, domain.ProjectID) (domain.GoalChainerProjectionRecord, error)
 	DeleteGoalChainerProjection(context.Context, domain.ProjectID) (bool, error)
+	ListProjectAgents(context.Context, domain.ProjectID) ([]domain.ProjectAgentRecord, error)
+	ListProjectAgentAttemptsByProject(context.Context, domain.ProjectID) ([]domain.ProjectAgentAttemptRecord, error)
 }
 
 // Manager is the controller-facing GoalChainer projection contract.
@@ -99,6 +101,11 @@ func (s *Service) Put(
 	if !exists {
 		return Projection{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
 	}
+	if projection.Protocol == ProtocolV2 {
+		if err := s.validateV2ProjectAgentAuthority(ctx, projectID, projection); err != nil {
+			return Projection{}, err
+		}
+	}
 	if projection.Protocol == ProtocolV1 {
 		projection.ProjectID = ""
 	}
@@ -130,6 +137,92 @@ func (s *Service) Put(
 	projection.ProjectID = record.ProjectID
 	projection.UpdatedAt = record.UpdatedAt
 	return projection, nil
+}
+
+// validateV2ProjectAgentAuthority checks AO-owned identities and immutable
+// attempt links without assigning identities to unbound declarations.
+func (s *Service) validateV2ProjectAgentAuthority(
+	ctx context.Context,
+	projectID domain.ProjectID,
+	projection Projection,
+) error {
+	persistedAgents, err := s.store.ListProjectAgents(ctx, projectID)
+	if err != nil {
+		return apierr.Internal(
+			"GOALCHAINER_AGENT_LOAD_FAILED",
+			"Failed to load project agents",
+		)
+	}
+	agentsByID := make(map[domain.ProjectAgentID]domain.ProjectAgentRecord, len(persistedAgents))
+	agentsByKey := make(map[domain.ProjectAgentKey]domain.ProjectAgentRecord, len(persistedAgents))
+	for _, agent := range persistedAgents {
+		agentsByID[agent.ID] = agent
+		agentsByKey[agent.ProjectAgentKey] = agent
+	}
+
+	for _, agent := range projection.Agents {
+		if agent.AgentID == "" {
+			if persisted, ok := agentsByKey[agent.AgentKey]; ok &&
+				persisted.Role != agent.Role {
+				return invalidProjection(
+					"v2 unbound agent role must match the persisted immutable role",
+				)
+			}
+			continue
+		}
+		persisted, ok := agentsByID[agent.AgentID]
+		if !ok ||
+			persisted.ProjectID != projectID ||
+			persisted.ProjectAgentKey != agent.AgentKey ||
+			persisted.Role != agent.Role {
+			return invalidProjection(
+				"v2 bound agentId, agentKey, and role must match an AO project agent",
+			)
+		}
+	}
+	referencedAgentIDs := make(map[domain.ProjectAgentID]struct{})
+	for _, task := range projection.Tasks {
+		for _, attempt := range task.SessionAttempts {
+			referencedAgentIDs[attempt.AgentID] = struct{}{}
+		}
+	}
+	if len(referencedAgentIDs) == 0 {
+		return nil
+	}
+	projectAttempts, err := s.store.ListProjectAgentAttemptsByProject(ctx, projectID)
+	if err != nil {
+		return apierr.Internal(
+			"GOALCHAINER_AGENT_ATTEMPT_LOAD_FAILED",
+			"Failed to load project-agent attempts",
+		)
+	}
+	persistedAttempts := make(map[string]domain.ProjectAgentAttemptRecord)
+	for _, attempt := range projectAttempts {
+		if _, referenced := referencedAgentIDs[attempt.AgentID]; !referenced {
+			continue
+		}
+		persistedAttempts[projectAgentAttemptKey(attempt.AgentID, attempt.Attempt)] = attempt
+	}
+	for _, task := range projection.Tasks {
+		for _, attempt := range task.SessionAttempts {
+			persisted, ok := persistedAttempts[projectAgentAttemptKey(
+				attempt.AgentID,
+				attempt.AgentAttempt,
+			)]
+			if !ok ||
+				persisted.ProjectID != projectID ||
+				persisted.SessionID != attempt.SessionID {
+				return invalidProjection(
+					"v2 session attempt must match an immutable AO project-agent attempt",
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func projectAgentAttemptKey(agentID domain.ProjectAgentID, attempt int64) string {
+	return string(agentID) + "\x00" + strconv.FormatInt(attempt, 10)
 }
 
 // Delete disconnects the UI projection. It cannot change GoalChainer state.
@@ -375,8 +468,7 @@ func validateV2TaskAttempts(
 		if _, duplicate := sessionIDs[attempt.SessionID]; duplicate {
 			return invalidProjection("v2 session IDs must be unique")
 		}
-		agentAttemptKey := string(attempt.AgentID) + "\x00" +
-			strconv.FormatInt(attempt.AgentAttempt, 10)
+		agentAttemptKey := projectAgentAttemptKey(attempt.AgentID, attempt.AgentAttempt)
 		if _, duplicate := agentAttempts[agentAttemptKey]; duplicate {
 			return invalidProjection("v2 AO attempt numbers must be unique per agent")
 		}

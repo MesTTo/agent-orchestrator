@@ -14,8 +14,13 @@ import (
 )
 
 type fakeStore struct {
-	project bool
-	record  domain.GoalChainerProjectionRecord
+	project          bool
+	record           domain.GoalChainerProjectionRecord
+	projectAgents    []domain.ProjectAgentRecord
+	projectAttempts  map[domain.ProjectAgentID][]domain.ProjectAgentAttemptRecord
+	agentsErr        error
+	attemptsErr      error
+	attemptListCalls int
 }
 
 func (f *fakeStore) GoalChainerProjectExists(context.Context, domain.ProjectID) (bool, error) {
@@ -50,6 +55,31 @@ func (f *fakeStore) DeleteGoalChainerProjection(
 	deleted := f.record.ProjectID != ""
 	f.record = domain.GoalChainerProjectionRecord{}
 	return deleted, nil
+}
+
+func (f *fakeStore) ListProjectAgents(
+	context.Context,
+	domain.ProjectID,
+) ([]domain.ProjectAgentRecord, error) {
+	if f.agentsErr != nil {
+		return nil, f.agentsErr
+	}
+	return f.projectAgents, nil
+}
+
+func (f *fakeStore) ListProjectAgentAttemptsByProject(
+	_ context.Context,
+	_ domain.ProjectID,
+) ([]domain.ProjectAgentAttemptRecord, error) {
+	f.attemptListCalls++
+	if f.attemptsErr != nil {
+		return nil, f.attemptsErr
+	}
+	var attempts []domain.ProjectAgentAttemptRecord
+	for _, agentAttempts := range f.projectAttempts {
+		attempts = append(attempts, agentAttempts...)
+	}
+	return attempts, nil
 }
 
 func validProjection() Projection {
@@ -111,6 +141,101 @@ func validV2Projection() Projection {
 		Activity:     "active",
 	}}
 	return projection
+}
+
+func authoritativeFakeStore() *fakeStore {
+	const (
+		currentAgentID domain.ProjectAgentID = "7e66da4a-2b4f-4e87-865f-14f554070faa"
+		oldAgentID     domain.ProjectAgentID = "272a4c63-64b9-47a0-9624-7fc0fff46aa1"
+	)
+	return &fakeStore{
+		project: true,
+		projectAgents: []domain.ProjectAgentRecord{
+			{
+				ID:              currentAgentID,
+				ProjectID:       "goalchainer",
+				ProjectAgentKey: "local-worker",
+				Role:            "worker",
+			},
+			{
+				ID:              oldAgentID,
+				ProjectID:       "goalchainer",
+				ProjectAgentKey: "old-worker",
+				Role:            "reviewer",
+			},
+		},
+		projectAttempts: map[domain.ProjectAgentID][]domain.ProjectAgentAttemptRecord{
+			currentAgentID: {
+				{
+					ProjectID: "goalchainer",
+					AgentID:   currentAgentID,
+					Attempt:   1,
+					SessionID: "goalchainer-7",
+				},
+			},
+			oldAgentID: {
+				{
+					ProjectID: "goalchainer",
+					AgentID:   oldAgentID,
+					Attempt:   1,
+					SessionID: "goalchainer-3",
+				},
+			},
+		},
+	}
+}
+
+func unbindCurrentAgent(projection *Projection) {
+	projection.Agents[0].AgentID = ""
+	for index := range projection.Tasks {
+		task := &projection.Tasks[index]
+		task.AgentID = ""
+	}
+	task := &projection.Tasks[0]
+	task.Attempts = 0
+	task.SessionID = ""
+	task.SessionAttempts = nil
+}
+
+func remapCurrentAgentKey(projection *Projection, key domain.ProjectAgentKey) {
+	projection.Agents[0].AgentKey = key
+	for index := range projection.Tasks {
+		task := &projection.Tasks[index]
+		task.AgentKey = key
+		task.AssignedAgent = string(key)
+		for linkIndex := range task.AtomspaceLinks {
+			if task.AtomspaceLinks[linkIndex].Scope == "private" {
+				task.AtomspaceLinks[linkIndex].Owner = string(key)
+			}
+		}
+	}
+}
+
+func remapCurrentAgentRole(projection *Projection, role domain.ProjectAgentRole) {
+	projection.Agents[0].Role = role
+	for index := range projection.Tasks {
+		projection.Tasks[index].AssignedRole = role
+	}
+}
+
+func assertV2ProjectionMutationsRejected(
+	t *testing.T,
+	tests map[string]func(*Projection),
+) {
+	t.Helper()
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			service := New(authoritativeFakeStore())
+			projection := validV2Projection()
+			mutate(&projection)
+
+			_, err := service.Put(t.Context(), "goalchainer", projection)
+
+			if apiErrorCode(err) != "INVALID_GOALCHAINER_PROJECTION" {
+				t.Fatalf("Put err = %v", err)
+			}
+		})
+	}
 }
 
 func TestPutGetDeleteProjectionWithoutTaskMutation(t *testing.T) {
@@ -192,7 +317,7 @@ func TestV1ProjectionKeepsLegacyStoredShape(t *testing.T) {
 }
 
 func TestV2ProjectionRoundTripsStableAgentsAttemptsAndLinks(t *testing.T) {
-	store := &fakeStore{project: true}
+	store := authoritativeFakeStore()
 	service := New(store)
 	projection := validV2Projection()
 
@@ -210,6 +335,9 @@ func TestV2ProjectionRoundTripsStableAgentsAttemptsAndLinks(t *testing.T) {
 		!strings.Contains(store.record.Projection, `"agentAttempt":1`) {
 		t.Fatalf("stored v2 projection = %s", store.record.Projection)
 	}
+	if store.attemptListCalls != 1 {
+		t.Fatalf("project attempt list calls = %d, want 1", store.attemptListCalls)
+	}
 	got, err := service.Get(context.Background(), "goalchainer")
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +350,7 @@ func TestV2ProjectionRoundTripsStableAgentsAttemptsAndLinks(t *testing.T) {
 }
 
 func TestV2ProjectionAcceptsUnassignedEitherTaskAndHistoricalReroute(t *testing.T) {
-	service := New(&fakeStore{project: true})
+	service := New(authoritativeFakeStore())
 	unassigned := validV2Projection()
 	task := &unassigned.Tasks[1]
 	task.Capability = "either"
@@ -274,8 +402,95 @@ func TestV2ProjectionAcceptsUnassignedEitherTaskAndHistoricalReroute(t *testing.
 	}
 }
 
+func TestV2ProjectionEnforcesPersistedProjectAgentAuthority(t *testing.T) {
+	assertV2ProjectionMutationsRejected(t, map[string]func(*Projection){
+		"invented stable UUID": func(projection *Projection) {
+			invented := domain.ProjectAgentID("76dd7750-15bb-4a96-ad0d-de776444818a")
+			projection.Agents[0].AgentID = invented
+			for index := range projection.Tasks {
+				projection.Tasks[index].AgentID = invented
+			}
+			projection.Tasks[0].SessionAttempts[0].AgentID = invented
+		},
+		"remapped key": func(projection *Projection) {
+			remapCurrentAgentKey(projection, "rewritten-worker")
+		},
+		"remapped immutable role": func(projection *Projection) {
+			remapCurrentAgentRole(projection, "rewritten-role")
+		},
+		"unknown AO attempt": func(projection *Projection) {
+			projection.Tasks[0].SessionAttempts[0].AgentAttempt = 2
+		},
+		"wrong attempt session": func(projection *Projection) {
+			projection.Tasks[0].SessionID = "goalchainer-8"
+			projection.Tasks[0].SessionAttempts[0].SessionID = "goalchainer-8"
+		},
+	})
+}
+
+func TestV2ProjectionPreservesUnboundDeclarationsWithPersistedRoleGuard(t *testing.T) {
+	t.Run("known key with same role remains unbound", func(t *testing.T) {
+		service := New(authoritativeFakeStore())
+		projection := validV2Projection()
+		unbindCurrentAgent(&projection)
+
+		saved, err := service.Put(t.Context(), "goalchainer", projection)
+
+		if err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+		if saved.Agents[0].AgentID != "" {
+			t.Fatalf("AO assigned an unobserved UUID: %#v", saved.Agents[0])
+		}
+	})
+
+	t.Run("unknown key remains unbound", func(t *testing.T) {
+		service := New(authoritativeFakeStore())
+		projection := validV2Projection()
+		unbindCurrentAgent(&projection)
+		remapCurrentAgentKey(&projection, "future-worker")
+
+		if _, err := service.Put(t.Context(), "goalchainer", projection); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	})
+
+	t.Run("known key cannot rewrite immutable role", func(t *testing.T) {
+		service := New(authoritativeFakeStore())
+		projection := validV2Projection()
+		unbindCurrentAgent(&projection)
+		remapCurrentAgentRole(&projection, "rewritten-role")
+
+		_, err := service.Put(t.Context(), "goalchainer", projection)
+
+		if apiErrorCode(err) != "INVALID_GOALCHAINER_PROJECTION" {
+			t.Fatalf("Put err = %v", err)
+		}
+	})
+}
+
+func TestV2ProjectionReportsProjectAgentAuthorityLoadFailures(t *testing.T) {
+	t.Run("agents", func(t *testing.T) {
+		store := authoritativeFakeStore()
+		store.agentsErr = errors.New("read failed")
+		_, err := New(store).Put(t.Context(), "goalchainer", validV2Projection())
+		if apiErrorCode(err) != "GOALCHAINER_AGENT_LOAD_FAILED" {
+			t.Fatalf("Put err = %v", err)
+		}
+	})
+
+	t.Run("attempts", func(t *testing.T) {
+		store := authoritativeFakeStore()
+		store.attemptsErr = errors.New("read failed")
+		_, err := New(store).Put(t.Context(), "goalchainer", validV2Projection())
+		if apiErrorCode(err) != "GOALCHAINER_AGENT_ATTEMPT_LOAD_FAILED" {
+			t.Fatalf("Put err = %v", err)
+		}
+	})
+}
+
 func TestV2ProjectionRejectsCrossProjectAndInconsistentAgentData(t *testing.T) {
-	tests := map[string]func(*Projection){
+	assertV2ProjectionMutationsRejected(t, map[string]func(*Projection){
 		"route project mismatch": func(p *Projection) {
 			p.ProjectID = "other-project"
 		},
@@ -374,18 +589,7 @@ func TestV2ProjectionRejectsCrossProjectAndInconsistentAgentData(t *testing.T) {
 			p.Tasks[1].AgentKey = ""
 			p.Tasks[1].AgentID = ""
 		},
-	}
-	for name, mutate := range tests {
-		t.Run(name, func(t *testing.T) {
-			service := New(&fakeStore{project: true})
-			projection := validV2Projection()
-			mutate(&projection)
-			_, err := service.Put(context.Background(), "goalchainer", projection)
-			if apiErrorCode(err) != "INVALID_GOALCHAINER_PROJECTION" {
-				t.Fatalf("Put err = %v", err)
-			}
-		})
-	}
+	})
 }
 
 func TestPutAcceptsAMettaScheduledTask(t *testing.T) {
